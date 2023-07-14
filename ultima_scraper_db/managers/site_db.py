@@ -181,6 +181,37 @@ class ContentManager:
         )
         return final_sum
 
+    async def media_sum(self, category: str):
+        session = async_object_session(self.__user__)
+        assert session
+
+        stmt1 = (
+            select(func.count())
+            .where(MediaModel.category == category)
+            .where(MediaModel.filepaths.any())
+            .join(StoryModel.media)
+            .where(StoryModel.user_id == self.__user__.id)
+        )
+        stmt2 = (
+            select(func.count())
+            .where(MediaModel.category == category)
+            .where(MediaModel.filepaths.any())
+            .join(PostModel.media)
+            .where(PostModel.user_id == self.__user__.id)
+        )
+        stmt3 = (
+            select(func.count())
+            .where(MediaModel.category == category)
+            .where(MediaModel.filepaths.any())
+            .join(MessageModel.media)
+            .where(MessageModel.user_id == self.__user__.id)
+        )
+        result1 = await session.scalar(stmt1)
+        result2 = await session.scalar(stmt2)
+        result3 = await session.scalar(stmt3)
+        final_sum = sum((result1 or 0, result2 or 0, result3 or 0))
+        return final_sum
+
 
 class StatementBuilder:
     def __init__(self, model: Type[UserModel | UserInfoModel]) -> None:
