@@ -198,7 +198,9 @@ class Database:
             alembic_cfg = self.alembica.config
             if not current_rev:
                 try:
-                    _revision = await conn.run_sync(run_revision, alembic_cfg, True)
+                    _revision = await conn.run_sync(
+                        run_revision, alembic_cfg, True, self.metadata
+                    )
                     pass
                 except CommandError as _e:
                     await self.run_migrations()

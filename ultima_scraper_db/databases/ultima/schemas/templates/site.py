@@ -2,7 +2,6 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
-    TIMESTAMP,
     BigInteger,
     Boolean,
     Float,
@@ -13,15 +12,17 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     and_,
+    select,
 )
+from sqlalchemy.ext.asyncio import async_object_session
 from sqlalchemy.ext.compiler import compiles  # type: ignore
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-
 from ultima_scraper_db.databases.ultima import (
     CustomFuncs,
     DefaultContentTypes,
     SiteTemplate,
 )
+from ultima_scraper_db.helpers import TIMESTAMPTZ, selectin_relationship
 
 if TYPE_CHECKING:
     from ultima_scraper_db.databases.ultima.schemas.management import SiteModel

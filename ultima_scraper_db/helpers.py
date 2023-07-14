@@ -1,16 +1,21 @@
 import sqlalchemy as sa
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.orm import relationship
 from sqlalchemy_utils.functions.database import _set_url_database  # type: ignore
 from sqlalchemy_utils.functions.database import _sqlite_file_exists  # type: ignore
 from sqlalchemy_utils.functions.database import make_url  # type: ignore
 from sqlalchemy_utils.functions.orm import quote  # type: ignore
-from ultima_scraper_api import user_types
-from ultima_scraper_api.apis.onlyfans.classes.user_model import (
-    create_user as OFUserModel,
-)
 
-from ultima_scraper_db.databases.ultima.schemas.templates.site import UserModel
+TIMESTAMPTZ = sa.TIMESTAMP(timezone=True)
+
+
+def selectin_relationship(*args: str, **kwargs: str):
+    return relationship(*args, lazy="selectin", **kwargs)
+
+
+def subquery_relationship(*args: str, **kwargs: str):
+    return relationship(*args, lazy="subquery", **kwargs)
 
 
 async def _get_scalar_result(engine: AsyncEngine, sql: sa.TextClause):
@@ -122,31 +127,3 @@ async def create_database(
             await conn.execute(sa.text(text))
 
     await engine.dispose()
-
-
-async def is_valuable(user: UserModel | user_types):
-    # Checks if performer has active subscription or has supplied content to a buyer
-    # We can add a "valid flag on get_supplied_content to return active authed users"
-    if isinstance(user, UserModel):
-        if await user.has_active_subscription() or await user.get_supplied_content():
-            return True
-        else:
-            return False
-    else:
-        if user.isPerformer:
-            if isinstance(user, OFUserModel):
-                if (
-                    user.subscribedIsExpiredNow == False
-                    or await user.get_paid_contents()
-                ):
-                    return True
-                else:
-                    return False
-            else:
-                # We need to add paid_content checker
-                if user.following:
-                    return True
-                else:
-                    return False
-        else:
-            return False

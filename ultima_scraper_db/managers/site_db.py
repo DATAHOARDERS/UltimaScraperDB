@@ -12,10 +12,10 @@ from ultima_scraper_api.apis.onlyfans.classes.comment_model import (
 from ultima_scraper_api.apis.onlyfans.classes.user_model import (
     create_user as OFUserModel,
 )
+from ultima_scraper_collection.helpers.main_helper import is_valuable
 from ultima_scraper_collection.managers.metadata_manager.metadata_manager import (
     ContentMetadata,
 )
-
 from ultima_scraper_db.databases.ultima.schemas.templates.site import (
     BoughtContentModel,
     CommentModel,
@@ -30,7 +30,6 @@ from ultima_scraper_db.databases.ultima.schemas.templates.site import (
     UserInfoModel,
     UserModel,
 )
-from ultima_scraper_db.helpers import is_valuable
 from ultima_scraper_db.managers.database_manager import Schema
 
 content_model_types = StoryModel | PostModel | MessageModel
@@ -45,15 +44,18 @@ class ContentManager:
         self,
         user: "UserModel",
     ):
-        self.stories: list["StoryModel"] = user._stories  # type: ignore
-        self.posts: list["PostModel"] = user._posts  # type: ignore
-        self.messages: list["MessageModel"] = user._messages  # type: ignore
         self.__user__ = user
 
-    async def get_contents(self, content_type: str | None = None):
+    async def init(self):
         await self.__user__.awaitable_attrs._stories
         await self.__user__.awaitable_attrs._posts
         await self.__user__.awaitable_attrs._messages
+        self.stories: list["StoryModel"] = self.__user__._stories  # type: ignore
+        self.posts: list["PostModel"] = self.__user__._posts  # type: ignore
+        self.messages: list["MessageModel"] = self.__user__._messages  # type: ignore
+        return self
+
+    async def get_contents(self, content_type: str | None = None):
         if content_type:
             # if not hasattr(self, content_type.lower()):
             #     empty_list: content_model_types = []
@@ -351,7 +353,7 @@ class SiteDB:
         for _key, contents in api_user.content_manager.categorized.__dict__.items():
             for _, content in contents.items():
                 await self.create_or_update_content(db_user, content)
-        db_user.last_checked_at = datetime.utcnow()
+        db_user.last_checked_at = datetime.now()
         user_info.size = await db_user.content_manager.sum()
         await self.session.flush()
         return db_user
@@ -448,7 +450,7 @@ class SiteDB:
     ):
         api_performer = content.__soft__.get_author()
         api_type = content.api_type
-        content_manager = db_performer.content_manager
+        content_manager = await db_performer.content_manager.init()
         found_db_content = await content_manager.find_content(content.content_id)
         if not found_db_content:
             pass
