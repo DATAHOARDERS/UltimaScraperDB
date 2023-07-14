@@ -17,6 +17,7 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import async_object_session
 from sqlalchemy.ext.compiler import compiles  # type: ignore
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+
 from ultima_scraper_db.databases.ultima import (
     CustomFuncs,
     DefaultContentTypes,
@@ -26,14 +27,6 @@ from ultima_scraper_db.helpers import TIMESTAMPTZ, selectin_relationship
 
 if TYPE_CHECKING:
     from ultima_scraper_db.databases.ultima.schemas.management import SiteModel
-
-
-def selectin_relationship(*args: str, **kwargs: str):
-    return relationship(*args, lazy="selectin", **kwargs)
-
-
-def subquery_relationship(*args: str, **kwargs: str):
-    return relationship(*args, lazy="subquery", **kwargs)
 
 
 class UserModel(SiteTemplate):
@@ -46,20 +39,14 @@ class UserModel(SiteTemplate):
     performer: Mapped[bool] = mapped_column(Boolean, server_default="false")
     favorite: Mapped[bool] = mapped_column(Boolean, server_default="false")
     active: Mapped[bool] = mapped_column(Boolean, server_default="true")
-    downloaded_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True), nullable=True
-    )
-    last_checked_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True), nullable=True
-    )
-    join_date: Mapped[datetime | None] = mapped_column(
-        TIMESTAMP(timezone=True), nullable=True
-    )
+    downloaded_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, nullable=True)
+    last_checked_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, nullable=True)
+    join_date: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True), server_default=CustomFuncs.utcnow()
+        TIMESTAMPTZ, server_default=CustomFuncs.utcnow()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True), onupdate=CustomFuncs.utcnow(), nullable=True
+        TIMESTAMPTZ, onupdate=CustomFuncs.utcnow(), nullable=True
     )
     user_auth_info: Mapped["UserAuthModel"] = selectin_relationship()
     user_infos: Mapped[list["UserInfoModel"]] = relationship(
@@ -268,12 +255,8 @@ class UserInfoModel(SiteTemplate):
     size: Mapped[int] = mapped_column(BigInteger, server_default="0")
     location: Mapped[str] = mapped_column(Text, nullable=True)
     website: Mapped[str] = mapped_column(Text, nullable=True)
-    downloaded_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True), nullable=True
-    )
-    uploaded_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True), nullable=True
-    )
+    downloaded_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, nullable=True)
+    uploaded_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, nullable=True)
     user: Mapped["UserModel"] = relationship(back_populates="user_infos")
 
 
@@ -317,7 +300,7 @@ class MediaModel(SiteTemplate):
     size: Mapped[int] = mapped_column(BigInteger, server_default="0", default="0")
     category: Mapped[str] = mapped_column(String, nullable=True)
     preview: Mapped[bool] = mapped_column(Boolean, server_default="false")
-    created_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    created_at: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ)
     filepaths: Mapped[list["FilePathModel"]] = relationship(
         "FilePathModel",
         # back_populates="media",
@@ -347,7 +330,7 @@ class StoryModel(ContentTemplate):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"))
-    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ)
 
     user: Mapped["UserModel"] = relationship(
         foreign_keys=user_id,
@@ -380,7 +363,7 @@ class PostModel(ContentTemplate):
     deleted: Mapped[bool] = mapped_column(Boolean, server_default="false")
     archived: Mapped[bool] = mapped_column(Boolean, server_default="false")
     paid: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ)
 
     user: Mapped["UserModel"] = relationship(
         foreign_keys=user_id,
@@ -416,7 +399,7 @@ class MessageModel(ContentTemplate):
     deleted: Mapped[bool] = mapped_column(Boolean, server_default="false")
     paid: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     verified: Mapped[bool] = mapped_column(Boolean, server_default="false")
-    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ)
 
     user: Mapped["UserModel"] = relationship(
         foreign_keys=user_id,
@@ -449,7 +432,7 @@ class CommentModel(SiteTemplate):
     giphy_id: Mapped[str | None] = mapped_column(String, server_default=None)
     text: Mapped[str | None] = mapped_column(String, server_default=None)
     likes_count: Mapped[int] = mapped_column(Integer, server_default="0")
-    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ)
 
 
 class SubscriptionModel(SiteTemplate):
@@ -461,10 +444,8 @@ class SubscriptionModel(SiteTemplate):
     subscriber_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"))
     paid_content: Mapped[bool] = mapped_column(Boolean, server_default="0")
     active: Mapped[bool] = mapped_column(Boolean, server_default="true")
-    downloaded_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True), nullable=True
-    )
-    expires_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True))
+    downloaded_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ)
 
     user: Mapped["UserModel"] = relationship(
         "UserModel",
@@ -533,6 +514,7 @@ class JobModel(SiteTemplate):
     )
     skippable: Mapped[bool] = mapped_column(Boolean, server_default="false")
     active: Mapped[bool] = mapped_column(Boolean, server_default="true")
+    completed_at: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ, nullable=True)
     user: Mapped[UserModel] = relationship(back_populates="jobs")
     site: Mapped["SiteModel"] = relationship(foreign_keys=site_id)
 
@@ -547,7 +529,7 @@ class NotificationModel(SiteTemplate):
     sent_discord: Mapped[bool] = mapped_column(Boolean, server_default="false")
     sent_telegram: Mapped[bool] = mapped_column(Boolean, server_default="false")
     created_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP, server_default=CustomFuncs.utcnow()
+        TIMESTAMPTZ, server_default=CustomFuncs.utcnow()
     )
 
     user: Mapped["UserModel"] = selectin_relationship()
@@ -571,6 +553,3 @@ class BoughtContentModel(SiteTemplate):
 
     supplier: Mapped[UserModel] = relationship(foreign_keys=supplier_id)
     buyer: Mapped[UserModel] = relationship(foreign_keys=buyer_id)
-
-
-# REMOVE
