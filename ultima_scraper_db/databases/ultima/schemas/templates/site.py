@@ -180,21 +180,40 @@ class UserModel(SiteTemplate):
             if bought_content.supplier_id == performer_id:
                 return bought_content
 
-    async def get_supplied_content(self):
+    async def get_supplied_content(self, active: bool = False):
+        final_supplied_content: list[BoughtContentModel] = []
         await self.awaitable_attrs.supplied_contents
-        return self.supplied_contents
+        if active:
+            for supplied_content in self.supplied_contents:
+                await supplied_content.awaitable_attrs.buyer
+                if not supplied_content.buyer.user_auth_info.active:
+                    continue
+                final_supplied_content.append(supplied_content)
+        else:
+            final_supplied_content = self.supplied_contents
+        return final_supplied_content
 
-    async def find_buyers(self):
+    async def find_buyers(self, active: bool = False):
         temp_buyers: set[UserModel] = set()
-        await self.awaitable_attrs.supplied_contents
-        for content in self.supplied_contents:
+        for content in await self.get_supplied_content(active=active):
             temp_buyers.add(await content.awaitable_attrs.buyer)
         await self.awaitable_attrs.subscribers
-        for subscription in self.subscribers:
-            # if subscription.expires_at < datetime.utcnow():
-            #     continue
-            temp_buyers.add(await subscription.awaitable_attrs.subscriber)  # type: ignore
-        return list(temp_buyers)
+        session = async_object_session(self)
+        assert session
+        query = (
+            select(UserModel)
+            .join(SubscriptionModel.subscriber)
+            .where(SubscriptionModel.user_id == self.id)
+        )
+        if active:
+            query = query.where(SubscriptionModel.expires_at >= datetime.now()).where(
+                UserModel.user_auth_info.has(active=True)
+            )
+        subscribers = await session.scalars(query)
+        for subscriber in subscribers:
+            temp_buyers.add(subscriber)
+        final_buyers = temp_buyers
+        return list(final_buyers)
 
     async def activate(self):
         self.user_auth_info.active = True
