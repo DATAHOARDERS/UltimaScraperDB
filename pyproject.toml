@@ -1,8 +1,8 @@
 [tool.poetry]
 name = "ultima-scraper-db"
-version = "0.1.1"
+version = "0.1.2"
 description = ""
-authors = ["CRIMINAL <89371864+DIGITALCRIMINALS@users.noreply.github.com>"]
+authors = ["DIGITALCRIMINAL <21285176+DIGITALCRIMINAL@users.noreply.github.com>"]
 readme = "README.md"
 packages = [{ include = "ultima_scraper_db" }]
 include = ["ultima_scraper_db/py.typed"]
@@ -17,6 +17,9 @@ ultima-scraper-collection = "^2.0.0"
 sqlalchemy-utils = "^0.41.1"
 alembic = "^1.11.1"
 sshtunnel = "^0.4.0"
+fastapi = "^0.100.1"
+uvicorn = {extras = ["standard"], version = "^0.23.2"}
+fastapi-pagination = "^0.12.6"
 
 
 [build-system]
