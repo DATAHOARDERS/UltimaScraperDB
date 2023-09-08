@@ -1,7 +1,7 @@
 import sqlalchemy as sa
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, relationship
 from sqlalchemy_utils.functions.database import _set_url_database  # type: ignore
 from sqlalchemy_utils.functions.database import _sqlite_file_exists  # type: ignore
 from sqlalchemy_utils.functions.database import make_url  # type: ignore
@@ -10,11 +10,11 @@ from sqlalchemy_utils.functions.orm import quote  # type: ignore
 TIMESTAMPTZ = sa.TIMESTAMP(timezone=True)
 
 
-def selectin_relationship(*args: str, **kwargs: str):
+def selectin_relationship(*args: str, **kwargs: Mapped[int] | Mapped[str]):
     return relationship(*args, lazy="selectin", **kwargs)
 
 
-def subquery_relationship(*args: str, **kwargs: str):
+def subquery_relationship(*args: str, **kwargs: Mapped[int] | Mapped[str]):
     return relationship(*args, lazy="subquery", **kwargs)
 
 

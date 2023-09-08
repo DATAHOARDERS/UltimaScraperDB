@@ -1,12 +1,16 @@
+import contextlib
 import itertools
+import threading
+import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+import uvicorn
 from alembic import command
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from alembic.operations.ops import MigrationScript
-from alembic.util import CommandError  # type: ignore
+from alembic.util import CommandError
 from sqlalchemy import Connection, MetaData, inspect
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -18,14 +22,20 @@ from sshtunnel import SSHTunnelForwarder  # type: ignore
 
 from ultima_scraper_db.helpers import create_database, database_exists
 
+if TYPE_CHECKING:
+    from ultima_scraper_db.databases.ultima_archive.api.client import UAClient
+
 
 class Alembica:
     def __init__(
-        self, database_path: str | Path | None = None, generate: bool = False
+        self,
+        database_path: str | Path | None = None,
+        generate: bool = False,
+        migrate: bool = True,
     ) -> None:
         if not database_path:
             self.database_path = Path(__file__).parent.parent.joinpath(
-                "databases/ultima"
+                "databases/ultima_archive"
             )
         else:
             self.database_path = Path(database_path)
@@ -37,6 +47,7 @@ class Alembica:
             self.migration_directory.as_posix(),
         )
         self.is_generate = generate
+        self.is_migrate = migrate
 
 
 class SSHConnection:
@@ -126,6 +137,12 @@ class Database:
 
             await conn.run_sync(create_schemas)
             await self.resolve_schemas()
+        assert self.alembica
+        if self.alembica.is_generate:
+            await self.generate_migration()
+            await self.resolve_schemas()
+        if self.alembica.is_migrate:
+            await self.run_migrations()
         return self
 
     async def resolve_schemas(self):
@@ -227,7 +244,7 @@ class Database:
                     break
             except Exception as e:
                 print(e)
-                pass
+                breakpoint()
 
 
 class DatabaseManager:
@@ -256,3 +273,34 @@ class DatabaseManager:
 
     def resolve_database(self, name: str):
         return self.databases[name]
+
+
+def thread_function(fast_api: "UAClient", port: int):
+    uvicorn.run(  # type: ignore
+        fast_api,
+        host="0.0.0.0",
+        port=port,
+        log_level="debug",
+    )
+
+
+class DatabaseAPI_:
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def activate_api(self, fast_api: "UAClient", port: int):
+        from multiprocessing import Process
+
+        x = Process(
+            target=thread_function,
+            args=(
+                fast_api,
+                port,
+            ),
+            daemon=True,
+        )
+        x.start()
+        self.server = x
+
+    def find_schema(self, name: str):
+        return self.database.schemas[name]
