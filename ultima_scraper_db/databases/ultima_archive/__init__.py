@@ -119,8 +119,7 @@ class SiteTemplate(UltimaBase):
     __abstract__ = True
 
 
-SUPPORTED_SITES = ["OnlyFans", "Fansly"]
-
+from ultima_scraper_api import SUPPORTED_SITES
 
 # Used for alembic upgrades
 from ultima_scraper_db.databases.ultima_archive.schemas import management as _

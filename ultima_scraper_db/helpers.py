@@ -1,3 +1,5 @@
+from typing import TYPE_CHECKING
+
 import sqlalchemy as sa
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
@@ -7,15 +9,23 @@ from sqlalchemy_utils.functions.database import _sqlite_file_exists  # type: ign
 from sqlalchemy_utils.functions.database import make_url  # type: ignore
 from sqlalchemy_utils.functions.orm import quote  # type: ignore
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from ultima_scraper_db.databases.ultima_archive.site_api import MediaManager
 TIMESTAMPTZ = sa.TIMESTAMP(timezone=True)
 
 
-def selectin_relationship(*args: str, **kwargs: Mapped[int] | Mapped[str]):
-    return relationship(*args, lazy="selectin", **kwargs)
+def selectin_relationship(
+    *args: str, back_populates: str | None = None, **kwargs: Mapped[int] | Mapped[str]
+):
+    return relationship(*args, lazy="selectin", back_populates=back_populates, **kwargs)
 
 
-def subquery_relationship(*args: str, **kwargs: Mapped[int] | Mapped[str]):
-    return relationship(*args, lazy="subquery", **kwargs)
+def subquery_relationship(
+    *args: str, back_populates: str | None = None, **kwargs: Mapped[int] | Mapped[str]
+):
+    return relationship(*args, lazy="subquery", back_populates=back_populates, **kwargs)
 
 
 async def _get_scalar_result(engine: AsyncEngine, sql: sa.TextClause):
@@ -127,3 +137,39 @@ async def create_database(
             await conn.execute(sa.text(text))
 
     await engine.dispose()
+
+
+def find_matching_filepaths(
+    media_manager: "MediaManager", temp_filepaths: list["Path"]
+):
+    """
+    Find matching file paths for media items without detections.
+
+    Args:
+        media_manager: The media manager from the content manager.
+        temp_filepaths: List of temporary file paths to search for matches.
+
+    Returns:
+        List of found file paths.
+    """
+    filepaths: list["Path"] = []
+
+    for _key, item in media_manager.medias.items():
+        if not item.media_detections:
+            found_filepath: "Path" | None = None
+            for db_filepath in item.filepaths:
+                for temp_filepath in temp_filepaths:
+                    if temp_filepath.name in db_filepath.filepath:
+                        found_filepath = temp_filepath
+                        break
+            if found_filepath:
+                filepaths.append(found_filepath)
+
+    return filepaths
+
+
+def has_detected_media(media_manager: "MediaManager"):
+    for _key, item in media_manager.medias.items():
+        if item.media_detections:
+            return True
+    return False
