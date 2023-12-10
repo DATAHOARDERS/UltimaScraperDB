@@ -10,12 +10,13 @@ from sqlalchemy.sql import expression
 
 if TYPE_CHECKING:
     from ultima_scraper_db.databases.ultima_archive.schemas.templates.site import (
+        MassMessageModel,
         MessageModel,
         PostModel,
         StoryModel,
     )
 
-    content_model_types = StoryModel | PostModel | MessageModel
+    content_model_types = StoryModel | PostModel | MessageModel | MassMessageModel
     pass
 
 
@@ -46,6 +47,9 @@ class DefaultContentTypes(AsyncAttrs):
     message_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("x_messages.id"), nullable=True
     )
+    mass_message_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("x_mass_messages.id"), nullable=True
+    )
     media_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("media.id"))
 
     @declared_attr
@@ -60,6 +64,10 @@ class DefaultContentTypes(AsyncAttrs):
     def message(self) -> Mapped["MessageModel"]:
         return relationship("MessageModel")
 
+    @declared_attr
+    def mass_message(self) -> Mapped["MassMessageModel"]:
+        return relationship("MassMessageModel")
+
     async def get_content(self):
         from ultima_scraper_db.databases.ultima_archive.schemas.templates.site import (
             ContentMediaAssoModel,
@@ -70,10 +78,11 @@ class DefaultContentTypes(AsyncAttrs):
         await self.awaitable_attrs.story
         await self.awaitable_attrs.post
         await self.awaitable_attrs.message
+        await self.awaitable_attrs.mass_message
         for key, _ in inspect(ContentMediaAssoModel).relationships.items():
             if any(x for x in exclusions if x == key):
                 continue
-            final_value: StoryModel | PostModel | MessageModel = getattr(self, key)
+            final_value: content_model_types = getattr(self, key)
             if final_value:
                 return final_value
         raise Exception("Content not set")
@@ -102,6 +111,8 @@ class DefaultContentTypes(AsyncAttrs):
                 self.post = content
             case "MessageModel":
                 self.message = content
+            case "MassMessageModel":
+                self.mass_message = content
             case _:
                 raise Exception("Content type not found")
 
