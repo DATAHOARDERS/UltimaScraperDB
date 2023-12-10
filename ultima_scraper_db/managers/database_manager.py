@@ -1,7 +1,4 @@
-import contextlib
 import itertools
-import threading
-import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -11,6 +8,7 @@ from alembic.config import Config
 from alembic.migration import MigrationContext
 from alembic.operations.ops import MigrationScript
 from alembic.util import CommandError
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import Connection, MetaData, inspect
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -19,7 +17,6 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sshtunnel import SSHTunnelForwarder  # type: ignore
-
 from ultima_scraper_db.helpers import create_database, database_exists
 
 if TYPE_CHECKING:
@@ -31,7 +28,7 @@ class Alembica:
         self,
         database_path: str | Path | None = None,
         generate: bool = False,
-        migrate: bool = True,
+        migrate: bool = False,
     ) -> None:
         if not database_path:
             self.database_path = Path(__file__).parent.parent.joinpath(
@@ -110,15 +107,17 @@ class Database:
         self.schemas: dict[str, Schema] = {}
         self.metadata = metadata
         self.alembica = alembica
+        self._echo = True
 
-    async def init_db(self):
+    async def init_db(self, echo: bool = False):
+        self._echo = echo
         if self.ssh:
             connection_string = f"postgresql+asyncpg://{self.username}:{self.password}@{self.ssh.local_bind_host}:{self.ssh.local_bind_port}/{self.name}"  # type: ignore
         else:
             connection_string = f"postgresql+asyncpg://{self.username}:{self.password}@{self.host}:{self.port}/{self.name}"
         engine = create_async_engine(
             connection_string,
-            echo=True,
+            echo=echo,
         )
         self.engine = engine
 
@@ -136,32 +135,36 @@ class Database:
                 session.commit()
 
             await conn.run_sync(create_schemas)
-            await self.resolve_schemas()
+        await self.resolve_schemas()
         assert self.alembica
         if self.alembica.is_generate:
             await self.generate_migration()
             await self.resolve_schemas()
         if self.alembica.is_migrate:
             await self.run_migrations()
+        await engine.dispose()
         return self
 
     async def resolve_schemas(self):
         connection_string = str(self.engine.url.render_as_string(hide_password=False))
         async with self.engine.connect() as conn:
             schema_strings: list[str] = await conn.run_sync(show_schemas)
-            assert schema_strings
-            for schema_string in schema_strings:
-                engine = create_async_engine(
-                    connection_string,
-                    echo=True,
-                    execution_options={"schema_translate_map": {None: schema_string}},
-                    pool_size=20,
-                )
-                async_session = AsyncSession(engine, expire_on_commit=False)
-                schema_obj = Schema(schema_string, engine, async_session, self)
+        assert schema_strings
+        for schema_string in schema_strings:
+            engine = create_async_engine(
+                connection_string,
+                echo=self._echo,
+                execution_options={
+                    "application_name": schema_string,
+                    "schema_translate_map": {None: schema_string},
+                },
+                pool_size=20,
+            )
+            async_session = AsyncSession(engine, expire_on_commit=False)
+            schema_obj = Schema(schema_string, engine, async_session, self)
 
-                self.schemas[schema_obj.name] = schema_obj
-            return self.schemas
+            self.schemas[schema_obj.name] = schema_obj
+        return self.schemas
 
     async def create(self):
         await create_database(self.engine.url.render_as_string(hide_password=False))
@@ -290,6 +293,17 @@ class DatabaseAPI_:
 
     def activate_api(self, fast_api: "UAClient", port: int):
         from multiprocessing import Process
+
+        origins = [
+            "*",
+        ]
+        fast_api.add_middleware(
+            CORSMiddleware,
+            allow_origins=origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
         x = Process(
             target=thread_function,
