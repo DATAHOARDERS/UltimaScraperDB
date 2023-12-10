@@ -12,11 +12,18 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     and_,
+    any_,
+    distinct,
+    exists,
+    func,
+    or_,
     select,
 )
 from sqlalchemy.ext.asyncio import async_object_session
 from sqlalchemy.ext.compiler import compiles  # type: ignore
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from ultima_scraper_api.apis.onlyfans.classes.extras import AuthDetails
+
 from ultima_scraper_db.databases.ultima_archive import (
     CustomFuncs,
     DefaultContentTypes,
@@ -26,6 +33,8 @@ from ultima_scraper_db.helpers import TIMESTAMPTZ, selectin_relationship
 
 if TYPE_CHECKING:
     from ultima_scraper_db.databases.ultima_archive.schemas.management import SiteModel
+    from ultima_scraper_db.databases.ultima_archive.site_api import ContentManager
+content_managers: dict[int, "ContentManager"] = {}
 
 
 class UserModel(SiteTemplate):
@@ -47,9 +56,14 @@ class UserModel(SiteTemplate):
     updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMPTZ, onupdate=CustomFuncs.utcnow(), nullable=True
     )
-    user_auth_info: Mapped["UserAuthModel"] = selectin_relationship()
-    user_infos: Mapped[list["UserInfoModel"]] = relationship(
+    user_auth_info: Mapped["UserAuthModel"] = selectin_relationship(
+        back_populates="user"
+    )
+    user_info: Mapped["UserInfoModel"] = relationship(
         foreign_keys="UserInfoModel.user_id", back_populates="user"
+    )
+    histo_user_infos: Mapped[list["HistoUserInfoModel"]] = relationship(
+        foreign_keys="HistoUserInfoModel.user_id", back_populates="user"
     )
 
     subscriptions: Mapped[list["SubscriptionModel"]] = relationship(
@@ -70,7 +84,13 @@ class UserModel(SiteTemplate):
         primaryjoin="or_(UserModel.id==MessageModel.user_id, "
         "UserModel.id==MessageModel.receiver_id)",
     )
-    _mass_messages: Mapped[list["MassMessageModel"]] = relationship()
+    _mass_messages: Mapped[list["MassMessageModel"]] = relationship(
+        back_populates="user"
+    )
+    medias: Mapped[list["MediaModel"]] = relationship(
+        "MediaModel",
+        back_populates="user",
+    )
     aliases: Mapped[list["UserAliasModel"]] = relationship(back_populates="user")
     jobs: Mapped[list["JobModel"]] = relationship(back_populates="user")
 
@@ -85,7 +105,14 @@ class UserModel(SiteTemplate):
     def content_manager(self):
         from ultima_scraper_db.databases.ultima_archive.site_api import ContentManager
 
-        return ContentManager(self)
+        content_manager = content_managers.get(self.id)
+        if not content_manager:
+            content_manager = ContentManager(self)
+            content_managers[self.id] = content_manager
+        else:
+            content_manager.__user__ = self
+            content_manager.session = async_object_session(self)
+        return content_manager
 
     async def find_content(self):
         pass
@@ -128,15 +155,13 @@ class UserModel(SiteTemplate):
 
     async def has_active_subscription(self):
         await self.awaitable_attrs.subscribers
-        return bool(
-            [x for x in self.subscribers if datetime.now().astimezone() < x.expires_at]
-        )
-
-    async def find_user_info(self, username: str):
-        await self.awaitable_attrs.user_infos
-        for user_info in self.user_infos:
-            if user_info.username == username:
-                return user_info
+        time_now = datetime.now().astimezone()
+        valid_subscribers = []
+        for x in self.subscribers:
+            await x.awaitable_attrs.subscriber
+            if x.subscriber.user_auth_info.active and time_now < x.expires_at:
+                valid_subscribers.append(x)
+        return bool(valid_subscribers)
 
     async def add_socials(self, socials: list[dict[str, Any]]):
         for social in socials:
@@ -210,9 +235,11 @@ class UserModel(SiteTemplate):
 
     async def find_bought_content(self, performer_id: int):
         await self.awaitable_attrs.bought_contents
+        db_bought_contents: list[BoughtContentModel] = []
         for bought_content in self.bought_contents:
             if bought_content.supplier_id == performer_id:
-                return bought_content
+                db_bought_contents.append(bought_content)
+        return db_bought_contents
 
     async def get_supplied_content(self, active: bool = False):
         final_supplied_content: list[BoughtContentModel] = []
@@ -227,8 +254,13 @@ class UserModel(SiteTemplate):
             final_supplied_content = self.supplied_contents
         return final_supplied_content
 
-    async def find_buyers(self, active: bool = False):
+    async def find_buyers(
+        self, active: bool = False, identifiers: list[int | str] = []
+    ):
         temp_buyers: set[UserModel] = set()
+        await self.awaitable_attrs.user_auth_info
+        if self.user_auth_info:
+            temp_buyers.add(self)
         for content in await self.get_supplied_content(active=active):
             temp_buyers.add(await content.awaitable_attrs.buyer)
         await self.awaitable_attrs.subscribers
@@ -246,25 +278,22 @@ class UserModel(SiteTemplate):
         subscribers = await session.scalars(query)
         for subscriber in subscribers:
             temp_buyers.add(subscriber)
-        final_buyers = temp_buyers
-        return list(final_buyers)
+        for identifier in identifiers:
+            for temp_buyer in temp_buyers.copy():
+                if isinstance(identifier, int) and temp_buyer.id != identifier:
+                    temp_buyers.remove(temp_buyer)
+                elif isinstance(identifier, str) and temp_buyer.username != identifier:
+                    temp_buyers.remove(temp_buyer)
+
+        final_buyers = list(temp_buyers)
+        final_buyers.sort(key=lambda buyer: (buyer.id != self.id, buyer.id))
+        return final_buyers
 
     async def activate(self):
         self.user_auth_info.active = True
-        await self.awaitable_attrs.subscriptions
-        for subscription in self.subscriptions:
-            await subscription.awaitable_attrs.user
-            if subscription.user.active:
-                subscription.active = True
-            else:
-                pass
-        pass
 
     async def deactivate(self):
-        await self.awaitable_attrs.subscriptions
         self.user_auth_info.active = False
-        for subscription in self.subscriptions:
-            subscription.active = False
 
 
 class UserAuthModel(SiteTemplate):
@@ -278,6 +307,19 @@ class UserAuthModel(SiteTemplate):
     email: Mapped[str] = mapped_column(Text, nullable=True)
     password: Mapped[str] = mapped_column(Text, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, server_default="true")
+    user: Mapped[UserModel] = selectin_relationship(back_populates="user_auth_info")
+
+    def convert_to_auth_details(self):
+        return AuthDetails(
+            id=self.id,
+            username=self.user.username,
+            cookie=self.cookie,
+            x_bc=self.x_bc,
+            user_agent=self.user_agent,
+            email=self.email,
+            password=self.password,
+            active=self.user.active,
+        )
 
     def update(self, info: dict[str, Any]):
         for k, v in info.items():
@@ -289,34 +331,74 @@ class UserAuthModel(SiteTemplate):
 class UserInfoModel(SiteTemplate):
     __tablename__ = "user_infos"
 
-    __table_args__ = (UniqueConstraint("user_id", "username"),)
+    __table_args__ = (UniqueConstraint("user_id"),)
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"))
-    username: Mapped[str] = mapped_column(Text, nullable=True)
     name: Mapped[str] = mapped_column(Text, nullable=True)
     price: Mapped[int] = mapped_column(Float, server_default="0")
     description: Mapped[str] = mapped_column(Text, nullable=True)
     promotion: Mapped[bool] = mapped_column(
         Boolean, server_default="true", default="true"
     )
-    sex: Mapped[int] = mapped_column(SmallInteger, nullable=True)
+    sex: Mapped[int] = mapped_column(SmallInteger, nullable=True, index=True)
     post_count: Mapped[int] = mapped_column(Integer, server_default="0")
+    media_count: Mapped[int] = mapped_column(Integer, server_default="0")
     image_count: Mapped[int] = mapped_column(Integer, server_default="0")
     video_count: Mapped[int] = mapped_column(Integer, server_default="0")
     audio_count: Mapped[int] = mapped_column(Integer, server_default="0")
+    stream_count: Mapped[int] = mapped_column(Integer, server_default="0")
+    archived_post_count: Mapped[int] = mapped_column(Integer, server_default="0")
+    private_archived_post_count: Mapped[int] = mapped_column(
+        Integer, server_default="0"
+    )
     favourited_count: Mapped[int] = mapped_column(Integer, server_default="0")
+    favourites_count: Mapped[int] = mapped_column(Integer, server_default="0")
+    subscribers_count: Mapped[int] = mapped_column(Integer, server_default="0")
     size: Mapped[int] = mapped_column(BigInteger, server_default="0")
     location: Mapped[str] = mapped_column(Text, nullable=True)
     website: Mapped[str] = mapped_column(Text, nullable=True)
     downloaded_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, nullable=True)
     uploaded_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, nullable=True)
-    user: Mapped["UserModel"] = relationship(back_populates="user_infos")
+    user: Mapped["UserModel"] = relationship(back_populates="user_info")
+
+
+class HistoUserInfoModel(SiteTemplate):
+    __tablename__ = "histo_user_infos"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"))
+    name: Mapped[str] = mapped_column(Text, nullable=True)
+    price: Mapped[int] = mapped_column(Float, server_default="0")
+    description: Mapped[str] = mapped_column(Text, nullable=True)
+    promotion: Mapped[bool] = mapped_column(
+        Boolean, server_default="true", default="true"
+    )
+    post_count: Mapped[int] = mapped_column(Integer, server_default="0")
+    media_count: Mapped[int] = mapped_column(Integer, server_default="0")
+    image_count: Mapped[int] = mapped_column(Integer, server_default="0")
+    video_count: Mapped[int] = mapped_column(Integer, server_default="0")
+    audio_count: Mapped[int] = mapped_column(Integer, server_default="0")
+    stream_count: Mapped[int] = mapped_column(Integer, server_default="0")
+    archived_post_count: Mapped[int] = mapped_column(Integer, server_default="0")
+    private_archived_post_count: Mapped[int] = mapped_column(
+        Integer, server_default="0"
+    )
+    favourited_count: Mapped[int] = mapped_column(Integer, server_default="0")
+    favourites_count: Mapped[int] = mapped_column(Integer, server_default="0")
+    subscribers_count: Mapped[int] = mapped_column(Integer, server_default="0")
+    size: Mapped[int] = mapped_column(BigInteger, server_default="0")
+    location: Mapped[str] = mapped_column(Text, nullable=True)
+    website: Mapped[str] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, server_default=func.now())
+    user: Mapped["UserModel"] = relationship(back_populates="histo_user_infos")
 
 
 class ContentMediaAssoModel(DefaultContentTypes, SiteTemplate):
     __tablename__ = "content_media_asso"
     __table_args__ = (
-        UniqueConstraint("story_id", "post_id", "message_id", "media_id"),
+        UniqueConstraint(
+            "story_id", "post_id", "message_id", "mass_message_id", "media_id"
+        ),
     )
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     media: Mapped["MediaModel"] = relationship(
@@ -349,27 +431,33 @@ class ContentMediaAssoModel(DefaultContentTypes, SiteTemplate):
 class MediaModel(SiteTemplate):
     __tablename__ = "media"
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"))
     url: Mapped[str] = mapped_column(Text, nullable=True)
     size: Mapped[int] = mapped_column(BigInteger, server_default="0", default="0")
     category: Mapped[str] = mapped_column(String, nullable=True)
     preview: Mapped[bool] = mapped_column(Boolean, server_default="false")
     created_at: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ)
+    user: Mapped["UserModel"] = relationship(back_populates="medias")
     filepaths: Mapped[list["FilePathModel"]] = relationship(
         "FilePathModel",
-        # back_populates="media",
+        back_populates="media",
+    )
+    media_detections: Mapped[list["MediaDetectionModel"]] = selectin_relationship(
+        "MediaDetectionModel",
+        back_populates="media",
     )
 
     content_media_assos: Mapped[list[ContentMediaAssoModel]] = relationship(
         back_populates="media"
     )
 
-    async def find_filepath(self, content_id: int, content_type: str):
+    def find_filepath(self, content_id: int, content_type: str):
         content_type = content_type if "Stories" != content_type else "Story"
-        await self.awaitable_attrs.filepaths
+        from inflection import singularize, underscore
+
         for filepath in self.filepaths:
-            fp_content_id = getattr(
-                filepath, f"{content_type.lower().removesuffix('s')}_id"
-            )
+            temp_type = singularize(underscore(content_type)).lower()
+            fp_content_id = getattr(filepath, f"{temp_type}_id")
             if fp_content_id == content_id:
                 return filepath
 
@@ -406,6 +494,33 @@ class StoryModel(ContentTemplate):
                 return media
 
 
+class LinkedPostModel(ContentTemplate):
+    __tablename__ = "linked_posts"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    post_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("x_posts.id"))
+    linked_post_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("x_posts.id"))
+    post: Mapped["PostModel"] = relationship("PostModel", foreign_keys=post_id)
+    linked_post: Mapped["PostModel"] = relationship(
+        "PostModel",
+        foreign_keys=linked_post_id,
+    )
+
+
+class LinkedUserModel(ContentTemplate):
+    __tablename__ = "linked_users"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    post_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("x_posts.id"))
+    linked_user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"))
+    post: Mapped["PostModel"] = relationship(
+        "PostModel",
+        foreign_keys=post_id,
+    )
+    linked_user: Mapped["UserModel"] = relationship(
+        "UserModel",
+        foreign_keys=linked_user_id,
+    )
+
+
 class PostModel(ContentTemplate):
     __tablename__ = "x_posts"
 
@@ -430,6 +545,34 @@ class PostModel(ContentTemplate):
         ),
         secondaryjoin=ContentMediaAssoModel.media_id == MediaModel.id,
         backref="posts",
+    )
+
+    # Relationship for posts linked by the current post
+    linked_posts: Mapped[list["PostModel"]] = relationship(
+        "PostModel",
+        secondary=LinkedPostModel.__table__,
+        primaryjoin=and_(
+            LinkedPostModel.post_id == id,
+        ),
+        secondaryjoin=LinkedPostModel.linked_post_id == id,
+    )
+
+    # Relationship for posts to which the current post is linked
+    linked_by_posts: Mapped[list["PostModel"]] = relationship(
+        "PostModel",
+        secondary=LinkedPostModel.__table__,
+        primaryjoin=and_(
+            LinkedPostModel.linked_post_id == id,
+        ),
+        secondaryjoin=LinkedPostModel.post_id == id,
+    )
+    linked_users: Mapped[list["UserModel"]] = relationship(
+        "UserModel",
+        secondary=LinkedUserModel.__table__,
+        primaryjoin=and_(
+            LinkedUserModel.post_id == id,
+        ),
+        secondaryjoin=LinkedUserModel.linked_user_id == UserModel.id,
     )
 
     async def find_media(self, media_id: int):
@@ -483,7 +626,7 @@ class MassMessageStatModel(SiteTemplate):
     media_count: Mapped[int] = mapped_column(SmallInteger)
     buyer_count: Mapped[int] = mapped_column(SmallInteger)
     sent_count: Mapped[int] = mapped_column(Integer)
-    view_count: Mapped[int] = mapped_column(SmallInteger)
+    view_count: Mapped[int] = mapped_column(Integer)
 
 
 class MassMessageModel(ContentTemplate):
@@ -497,9 +640,27 @@ class MassMessageModel(ContentTemplate):
     price: Mapped[float] = mapped_column(Float)
     expires_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ)
+
+    user: Mapped[UserModel] = relationship(back_populates="_mass_messages")
     mass_message_stat: Mapped["MassMessageStatModel"] = relationship(
         foreign_keys=statistic_id,
     )
+
+    media: Mapped[list["MediaModel"]] = relationship(
+        "MediaModel",
+        secondary=ContentMediaAssoModel.__table__,
+        primaryjoin=and_(
+            ContentMediaAssoModel.mass_message_id == id,
+        ),
+        secondaryjoin=ContentMediaAssoModel.media_id == MediaModel.id,
+        backref="mass_messages",
+    )
+
+    async def find_media(self, media_id: int):
+        await self.awaitable_attrs.media
+        for media in self.media:
+            if media.id == media_id:
+                return media
 
 
 class CommentModel(SiteTemplate):
@@ -550,10 +711,10 @@ class FilePathModel(DefaultContentTypes, SiteTemplate):
 
     preview: Mapped[bool] = mapped_column(Boolean, server_default="false")
     downloaded: Mapped[bool] = mapped_column(Boolean, server_default="false")
-    # media: Mapped["MediaModel"] = relationship(
-    #     "MediaModel",
-    #     # back_populates="filepaths",
-    # )
+    media: Mapped["MediaModel"] = relationship(
+        "MediaModel",
+        back_populates="filepaths",
+    )
 
 
 class UserAliasModel(SiteTemplate):
@@ -649,3 +810,95 @@ class RemoteURLModel(SiteTemplate):
     exists: Mapped[bool] = mapped_column(Boolean, server_default="False")
     uploaded_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ)
     downloaded_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, nullable=True)
+
+
+class MediaDetectionModel(SiteTemplate):
+    __tablename__ = "media_detections"
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    media_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("media.id"))
+    label: Mapped[str] = mapped_column(Text)
+
+    # Female-specific labels
+    face_female: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    female_genitalia_covered: Mapped[bool] = mapped_column(
+        Boolean, server_default="false"
+    )
+    female_genitalia_exposed: Mapped[bool] = mapped_column(
+        Boolean, server_default="false"
+    )
+    female_breast_covered: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    female_breast_exposed: Mapped[bool] = mapped_column(Boolean, server_default="false")
+
+    # Male-specific labels
+    face_male: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    male_genitalia_exposed: Mapped[bool] = mapped_column(
+        Boolean, server_default="false"
+    )
+    male_breast_exposed: Mapped[bool] = mapped_column(Boolean, server_default="false")
+
+    # Ambiguous labels
+    buttocks_covered: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    buttocks_exposed: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    anus_covered: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    anus_exposed: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    feet_covered: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    feet_exposed: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    belly_covered: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    belly_exposed: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    armpits_covered: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    armpits_exposed: Mapped[bool] = mapped_column(Boolean, server_default="false")
+
+    # Other labels
+    score: Mapped[int] = mapped_column(Float, server_default="0")
+    x_coord: Mapped[int | None] = mapped_column(Integer)
+    y_coord: Mapped[int | None] = mapped_column(Integer)
+    width: Mapped[int | None] = mapped_column(Integer)
+    height: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMPTZ, server_default=CustomFuncs.utcnow()
+    )
+    media: Mapped["MediaModel"] = relationship()
+
+    class MediaDetectionFilter:
+        label: str
+        score: float
+
+    def filter_stmt(self, filters: list[MediaDetectionFilter], sex: int | None):
+        # Start with a base query
+        base_query = (
+            select(FilePathModel)
+            .join(
+                MediaDetectionModel,
+                FilePathModel.media_id == MediaDetectionModel.media_id,
+            )
+            .join(MediaModel)
+            .join(UserModel)
+            .join(UserInfoModel)
+        )
+        if sex is not None:
+            base_query = base_query.where(UserInfoModel.sex == sex)
+
+        # Dynamically construct the filter conditions
+        for media_filter in filters:
+            subquery = (
+                exists()
+                .where(
+                    and_(
+                        FilePathModel.media_id == MediaDetectionModel.media_id,
+                        MediaDetectionModel.label.contains(media_filter.label),
+                        MediaDetectionModel.score >= media_filter.score,
+                    )
+                )
+                .correlate(FilePathModel)
+            )
+            # Apply the constructed condition to the base query
+            base_query = base_query.where(subquery)
+
+        # Order the query
+        stmt = base_query.distinct().order_by(FilePathModel.media_id)
+
+        return stmt
+
+
+content_models = [StoryModel, PostModel, MessageModel, MassMessageModel]
