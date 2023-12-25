@@ -841,84 +841,85 @@ class SiteAPI:
                     spotify["socialMedia"] = "spotify"
                     spotify["username"] = spotify["displayName"]
                     await db_user.add_socials([spotify])
-        assert self.datascraper
-        content_manager = self.datascraper.resolve_content_manager(api_user)
-        for _key, contents in content_manager.categorized.__dict__.items():
 
-            async def process_content_async(
-                site_api: SiteAPI, db_user: UserModel, content: Any
-            ):
-                try:
-                    await site_api.create_or_update_content(db_user, content)
-                except Exception as _e:
-                    breakpoint()
-                    print(_e)
+        if self.datascraper:
+            content_manager = self.datascraper.resolve_content_manager(api_user)
+            for _key, contents in content_manager.categorized.__dict__.items():
 
-            async def process_media_async(
-                site_api: SiteAPI, db_user: UserModel, media: MediaMetadata
-            ):
-                try:
-                    await site_api.create_or_update_media(db_user, media)
-                except Exception as _e:
-                    print(_e)
-                    breakpoint()
-
-            async def process_filepath_async(
-                site_api: SiteAPI, db_user: UserModel, media: MediaMetadata
-            ):
-                try:
-                    await site_api.create_or_update_filepaths(db_user, media)
-                except Exception as _e:
-                    print(_e)
-                    breakpoint()
-
-            _result = await asyncio.gather(
-                *[
-                    process_content_async(self, db_user, content)
-                    for content in contents.values()
-                ],
-                return_exceptions=True,
-            )
-            for content in contents.values():
-                db_content = content.__db_content__
-                if (
-                    isinstance(db_content, MassMessageModel)
-                    and content.api_type == "Messages"
+                async def process_content_async(
+                    site_api: SiteAPI, db_user: UserModel, content: Any
                 ):
-                    session = self.get_session()
-                    stmt = delete(FilePathModel).where(
-                        FilePathModel.mass_message_id == db_content.id
-                    )
+                    try:
+                        await site_api.create_or_update_content(db_user, content)
+                    except Exception as _e:
+                        breakpoint()
+                        print(_e)
 
-                    await session.execute(stmt)
-                    pass
-                    stmt = delete(ContentMediaAssoModel).where(
-                        ContentMediaAssoModel.mass_message_id == db_content.id
-                    )
-                    await session.execute(stmt)
-                    await session.delete(db_content)
-                    await session.commit()
-            await session.commit()
+                async def process_media_async(
+                    site_api: SiteAPI, db_user: UserModel, media: MediaMetadata
+                ):
+                    try:
+                        await site_api.create_or_update_media(db_user, media)
+                    except Exception as _e:
+                        print(_e)
+                        breakpoint()
 
-            _result2 = await asyncio.gather(
-                *[
-                    process_media_async(self, db_user, media)
-                    for content in contents.values()
-                    for media in content.medias
-                ],
-                return_exceptions=True,
-            )
-            _result2 = await asyncio.gather(
-                *[
-                    process_filepath_async(self, db_user, media)
-                    for content in contents.values()
-                    for media in content.medias
-                ],
-                return_exceptions=True,
-            )
-            for _, content in contents.items():
-                await self.create_or_update_comment(content)
-            await session.commit()
+                async def process_filepath_async(
+                    site_api: SiteAPI, db_user: UserModel, media: MediaMetadata
+                ):
+                    try:
+                        await site_api.create_or_update_filepaths(db_user, media)
+                    except Exception as _e:
+                        print(_e)
+                        breakpoint()
+
+                _result = await asyncio.gather(
+                    *[
+                        process_content_async(self, db_user, content)
+                        for content in contents.values()
+                    ],
+                    return_exceptions=True,
+                )
+                for content in contents.values():
+                    db_content = content.__db_content__
+                    if (
+                        isinstance(db_content, MassMessageModel)
+                        and content.api_type == "Messages"
+                    ):
+                        session = self.get_session()
+                        stmt = delete(FilePathModel).where(
+                            FilePathModel.mass_message_id == db_content.id
+                        )
+
+                        await session.execute(stmt)
+                        pass
+                        stmt = delete(ContentMediaAssoModel).where(
+                            ContentMediaAssoModel.mass_message_id == db_content.id
+                        )
+                        await session.execute(stmt)
+                        await session.delete(db_content)
+                        await session.commit()
+                await session.commit()
+
+                _result2 = await asyncio.gather(
+                    *[
+                        process_media_async(self, db_user, media)
+                        for content in contents.values()
+                        for media in content.medias
+                    ],
+                    return_exceptions=True,
+                )
+                _result2 = await asyncio.gather(
+                    *[
+                        process_filepath_async(self, db_user, media)
+                        for content in contents.values()
+                        for media in content.medias
+                    ],
+                    return_exceptions=True,
+                )
+                for _, content in contents.items():
+                    await self.create_or_update_comment(content)
+                await session.commit()
         db_user_info.size = await db_user.content_manager.size_sum()
         db_user.last_checked_at = datetime.now()
         await session.commit()
