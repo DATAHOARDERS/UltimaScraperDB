@@ -2,12 +2,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 from sqlalchemy import or_, orm, select
 from sqlalchemy.orm import contains_eager, lazyload, sessionmaker
-
 from ultima_scraper_db.databases.ultima_archive.api.client import UAClient
 from ultima_scraper_db.databases.ultima_archive.schemas.templates.site import UserModel
 
 restricted = (
-    lazyload(UserModel.user_auth_info),
+    lazyload(UserModel.user_auths_info),
     orm.defer(UserModel.performer),
     orm.defer(UserModel.favorite),
     orm.defer(UserModel.balance),
@@ -32,12 +31,13 @@ class Item(BaseModel):
 
 @router.get("/")
 async def get_users(
+    site_name: str,
     page: int,
     limit: int,
 ):
     database_api = UAClient.database_api
 
-    site_api = database_api.site_apis["onlyfans"]
+    site_api = database_api.site_apis[site_name]
     limit = 100 if limit > 100 else limit
     offset = max(0, (page - 1) * limit)
     stmt = (
@@ -49,16 +49,17 @@ async def get_users(
         .order_by(UserModel.id)
         .options(*restricted)
     )
-    users = await site_api.session.scalars(stmt)
+    users = await site_api.get_session().scalars(stmt)
     return users.all()
 
 
 @router.get("/{identifier}")
-async def read(request: Request, identifier: int | str):
+async def read(site_name: str, identifier: int | str):
     database_api = UAClient.database_api
 
-    site_api = database_api.site_apis["onlyfans"]
-    user = await site_api.get_user(identifier, restricted)
-    if user:
-        await user.awaitable_attrs.aliases
-    return user
+    site_api = database_api.get_site_api(site_name)
+    async with site_api as site_api:
+        user = await site_api.get_user(identifier, extra_options=restricted)
+        if user:
+            await user.awaitable_attrs.aliases
+        return user

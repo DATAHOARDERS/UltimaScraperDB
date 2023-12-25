@@ -103,7 +103,7 @@ class DefaultContentTypes(AsyncAttrs):
                 return final_key, final_value
         raise Exception("Content not set")
 
-    async def set_content(self, content: "content_model_types"):
+    def set_content(self, content: "content_model_types"):
         match type(content).__name__:
             case "StoryModel":
                 self.story = content

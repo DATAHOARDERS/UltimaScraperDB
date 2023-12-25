@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING, Any, Type
 from urllib.parse import ParseResult
 
 import ultima_scraper_api
+from alive_progress import alive_bar
+from inflection import singularize, underscore
 from sqlalchemy import (
     BigInteger,
     Boolean,
@@ -13,6 +15,7 @@ from sqlalchemy import (
     SmallInteger,
     Text,
     UnaryExpression,
+    delete,
     or_,
     orm,
     select,
@@ -21,9 +24,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.ext.asyncio.session import async_object_session
 from sqlalchemy.orm import joinedload, selectinload, subqueryload
 from sqlalchemy.sql import and_, exists, func, select, union_all
-from ultima_scraper_api.apis.onlyfans.classes.auth_model import AuthModel
+from ultima_scraper_api.apis.fansly.classes.auth_model import FanslyAuthModel
+from ultima_scraper_api.apis.fansly.classes.extras import (
+    AuthDetails as FanslyAuthDetails,
+)
+from ultima_scraper_api.apis.onlyfans.classes.auth_model import OnlyFansAuthModel
 from ultima_scraper_api.apis.onlyfans.classes.comment_model import (
     CommentModel as OFCommentModel,
+)
+from ultima_scraper_api.apis.onlyfans.classes.extras import (
+    AuthDetails as OnlyFansAuthDetails,
 )
 from ultima_scraper_api.apis.onlyfans.classes.user_model import (
     create_user as OFUserModel,
@@ -32,13 +42,14 @@ from ultima_scraper_api.helpers.main_helper import date_between_cur_month, split
 from ultima_scraper_collection.helpers.main_helper import is_notif_valuable, is_valuable
 from ultima_scraper_collection.managers.metadata_manager.metadata_manager import (
     ContentMetadata,
+    MediaMetadata,
 )
-
 from ultima_scraper_db.databases.ultima_archive.filters import AuthedInfoFilter
 from ultima_scraper_db.databases.ultima_archive.schemas.management import SiteModel
 from ultima_scraper_db.databases.ultima_archive.schemas.templates.site import (
     BoughtContentModel,
     CommentModel,
+    ContentMediaAssoModel,
     ContentTemplate,
     FilePathModel,
     JobModel,
@@ -68,7 +79,12 @@ from sqlalchemy import inspect
 from sqlalchemy.orm.strategy_options import _AbstractLoad
 
 
-def create_options(alias: bool = False, user_info: bool = False, content: bool = False):
+def create_options(
+    alias: bool = False,
+    user_info: bool = False,
+    content: bool = False,
+    media: bool = False,
+):
     joined_options: list[_AbstractLoad] = []
     if alias:
         stmt = selectinload(UserModel.aliases)
@@ -86,6 +102,12 @@ def create_options(alias: bool = False, user_info: bool = False, content: bool =
                         content_relationship["media"]
                     ).selectinload(MediaModel.filepaths)
                 joined_options.append(stmt)
+    if media:
+        stmt = selectinload(UserModel.medias).options(
+            joinedload(MediaModel.filepaths),
+            joinedload(MediaModel.content_media_assos),
+        )
+        joined_options.append(stmt)
     if user_info:
         stmt = selectinload(UserModel.user_info)
         joined_options.append(stmt)
@@ -116,9 +138,26 @@ class MediaManager:
         self.content_manager = content_manager
         self.medias: dict[int, MediaModel] = {}
 
-    async def init(self):
-        for item in self.medias.values():
-            await item.awaitable_attrs.filepaths
+    async def init(self, media_ids: list[int] = []):
+        user = self.content_manager.__user__
+        await user.awaitable_attrs.medias
+        for media in user.medias:
+            self.medias[media.id] = media
+        # remove duplicate ids from media_ids by self.media_ids
+        final_media_ids = [x for x in media_ids if x not in self.medias]
+        if media_ids:
+            stmt = (
+                select(MediaModel)
+                .where(MediaModel.id.in_(final_media_ids))
+                .options(
+                    joinedload(MediaModel.filepaths),
+                    joinedload(MediaModel.content_media_assos),
+                )
+            )
+            assert self.content_manager.session
+            found_medias = await self.content_manager.session.scalars(stmt)
+            for media in found_medias.unique():
+                self.medias[media.id] = media
         self.filepath_manager = FilePathManager(self.content_manager)
 
     def find_media(self, media_id: int):
@@ -138,12 +177,10 @@ class ContentManager:
     ):
         self.__user__ = user
         self.session = async_object_session(user)
-        if not self.session:
-            pass
         self.lock = asyncio.Lock()
         self.media_manager = MediaManager(self)
 
-    async def init(self):
+    async def init(self, media_ids: list[int] = []):
         await self.__user__.awaitable_attrs._stories
         await self.__user__.awaitable_attrs._posts
         await self.__user__.awaitable_attrs._messages
@@ -172,20 +209,22 @@ class ContentManager:
             for content in self.messages
             for item in await content.awaitable_attrs.media
         ]
-        self.mass_messages: list["MessageModel"] = self.__user__._mass_messages  # type: ignore
+        self.mass_messages: list["MassMessageModel"] = self.__user__._mass_messages  # type: ignore
         [
             media_manager.add_media(item)
             for content in self.mass_messages
             for item in await content.awaitable_attrs.media
         ]
-        await media_manager.init()
+        if media_ids:
+            pass
+        await media_manager.init(media_ids=media_ids)
         return self
 
     def get_media_manager(self):
         return self.media_manager
 
     def get_filepath_manager(self):
-        return self.media_manager.filepath_manager
+        return self.get_media_manager().filepath_manager
 
     async def get_contents(self, content_type: str | None = None):
         if content_type:
@@ -205,7 +244,7 @@ class ContentManager:
                     created_at=content.__soft__.created_at,
                 )
                 self.stories.append(content_model)
-            case "Posts":
+            case "Posts" | "Archived/Posts":
                 content_model = PostModel(
                     id=content.content_id,
                     user_id=content.user_id,
@@ -216,6 +255,9 @@ class ContentManager:
                 )
                 self.posts.append(content_model)
             case "Messages":
+                queue_id = (
+                    content.queue_id if content.__soft__.is_mass_message() else None
+                )
                 content_model = MessageModel(
                     id=content.content_id,
                     user_id=content.user_id,
@@ -224,6 +266,7 @@ class ContentManager:
                     price=content.price,
                     paid=int(content.paid),
                     verified=True,
+                    queue_id=queue_id,
                     created_at=content.__soft__.created_at,
                 )
                 self.messages.append(content_model)
@@ -232,17 +275,16 @@ class ContentManager:
                 pass
             case "MassMessages":
                 stat = content.get_mass_message_stat()
-                assert stat
                 content_model = MassMessageModel(
                     id=content.content_id,
                     user_id=content.user_id,
-                    statistic_id=stat.id,
+                    statistic_id=stat.id if stat else None,
                     text=content.text,
                     price=content.price,
                     expires_at=content.__soft__.expires_at,
                     created_at=content.__soft__.created_at,
                 )
-                pass
+                self.mass_messages.append(content_model)
             case _:
                 raise Exception("Content not assigned")
         return content_model
@@ -421,11 +463,15 @@ class SiteAPI:
         load_aliases: bool = False,
         load_user_info: bool = False,
         load_content: bool = False,
+        load_media: bool = False,
         limit: int | None = None,
         extra_options: Any = (),
     ):
         options = create_options(
-            content=load_content, user_info=load_user_info, alias=load_aliases
+            content=load_content,
+            media=load_media,
+            user_info=load_user_info,
+            alias=load_aliases,
         )
         options += extra_options
         stmt_builder = (
@@ -453,6 +499,7 @@ class SiteAPI:
         load_aliases: bool = False,
         load_user_info: bool = True,
         load_content: bool = False,
+        load_media: bool = False,
         authed_info_filter: AuthedInfoFilter | None = None,
         limit: int | None = None,
         order_by: UnaryExpression[Any] | None = None,
@@ -466,13 +513,14 @@ class SiteAPI:
             load_aliases,
             load_user_info,
             load_content,
+            load_media,
             limit,
             extra_options,
         )
         if authed_info_filter:
             if authed_info_filter.exclude_between_dates:
                 stmt = stmt.where(
-                    ~UserModel.user_auth_info.has(
+                    ~UserModel.user_auths_info.any(
                         UserModel.last_checked_at.between(
                             *authed_info_filter.exclude_between_dates
                         )
@@ -480,7 +528,7 @@ class SiteAPI:
                 )
             if authed_info_filter.active is not None:
                 stmt = stmt.where(
-                    UserModel.user_auth_info.has(active=authed_info_filter.active)
+                    UserModel.user_auths_info.any(active=authed_info_filter.active)
                 )
         if order_by is not None:
             stmt = stmt.order_by(order_by)
@@ -501,6 +549,7 @@ class SiteAPI:
         load_aliases: bool = False,
         load_user_info: bool = False,
         load_content: bool = False,
+        load_media: bool = False,
         limit: int | None = None,
         extra_options: Any = (),
     ) -> UserModel | None:
@@ -512,6 +561,7 @@ class SiteAPI:
             load_aliases,
             load_user_info,
             load_content,
+            load_media,
             limit,
             extra_options,
         )
@@ -549,8 +599,24 @@ class SiteAPI:
 
     async def get_media(self, media_id: int):
         stmt = select(MediaModel).where(MediaModel.id == media_id)
+        found_media = await self.get_session().scalar(stmt)
+        if found_media:
+            await found_media.awaitable_attrs.filepaths
+        return found_media
+
+    async def get_medias(self, user_id: int, media_ids: list[int] | None = None):
+        stmt = (
+            select(MediaModel)
+            .where(MediaModel.user_id == user_id)
+            .options(
+                joinedload(MediaModel.filepaths),
+                joinedload(MediaModel.content_media_assos),
+            )
+        )
+        if media_ids is not None:
+            stmt = stmt.where(MediaModel.id.in_(media_ids))
         found_media = await self.get_session().scalars(stmt)
-        return found_media.first()
+        return found_media.unique().all()
 
     async def get_filepaths(self, identifier: int | str):
         stmt = select(FilePathModel)
@@ -578,6 +644,7 @@ class SiteAPI:
         server_id: int | None = None,
         user_id: int | None = None,
         category: str | None = None,
+        priority: bool | None = None,
         active: bool | None = None,
         page: int = 1,
         limit: int | None = 100,
@@ -592,11 +659,14 @@ class SiteAPI:
             stmt = stmt.filter_by(user_id=user_id)
         if category:
             stmt = stmt.filter_by(category=category)
+        if priority is not None:
+            stmt = stmt.filter_by(priority=priority)
         if active is not None:
             stmt = stmt.filter_by(active=active)
 
         stmt = (
             stmt.join(JobModel.user)
+            .order_by(JobModel.priority.desc())
             .order_by(JobModel.id.asc())
             .order_by(UserModel.downloaded_at.desc())
             .options(orm.contains_eager(JobModel.user))
@@ -609,7 +679,11 @@ class SiteAPI:
         return found_jobs.all()
 
     async def create_or_update_job(
-        self, db_user: UserModel, category: str, server_id: int = 1
+        self,
+        db_user: UserModel,
+        category: str,
+        server_id: int = 1,
+        priority: bool = False,
     ):
         session = self.get_session()
         db_jobs = await self.get_jobs(user_id=db_user.id, category=category)
@@ -621,6 +695,7 @@ class SiteAPI:
             db_job.user_username = db_user.username
             db_job.category = category
             db_job.server_id = server_id
+            db_job.priority = priority
             db_job.active = True
         else:
             db_job = JobModel(
@@ -629,6 +704,7 @@ class SiteAPI:
                 user_username=db_user.username,
                 category=category,
                 server_id=server_id,
+                priority=priority,
             )
             session.add(db_job)
         await session.commit()
@@ -637,8 +713,13 @@ class SiteAPI:
     async def update_user(
         self, api_user: ultima_scraper_api.user_types, found_db_user: UserModel | None
     ):
+        assert self.datascraper
+        content_manager = self.datascraper.resolve_content_manager(api_user)
+        assert found_db_user
+        for media in content_manager.media_manager.medias.values():
+            db_media = await self.create_or_update_media(found_db_user, media)
         _db_user = await self.create_or_update_user(
-            api_user, existing_user=found_db_user
+            api_user, existing_user=found_db_user, performer_optimize=True
         )
 
         current_job = api_user.get_current_job()
@@ -650,7 +731,7 @@ class SiteAPI:
         self,
         api_user: ultima_scraper_api.user_types,
         existing_user: UserModel | None,
-        optimize: bool = False,
+        performer_optimize: bool = False,
     ):
         session = self.get_session()
         db_user = existing_user or UserModel()
@@ -668,19 +749,39 @@ class SiteAPI:
 
         db_user_info = await self.create_or_update_user_info(api_user, db_user)
         _alias = await db_user.add_alias(api_user.username)
+        status = False
         if not existing_user:
             if await is_notif_valuable(api_user):
+                status = True
+        if existing_user:
+            await db_user.awaitable_attrs.subscribers
+            if not db_user.subscribers:
+                if await is_notif_valuable(api_user):
+                    status = True
+        if (
+            api_user.is_authed_user()
+            and api_user.is_performer()
+            and not db_user.user_auths_info
+        ):
+            status = True
+
+        if status:
+            await db_user.awaitable_attrs.notifications
+            notification_exists = [
+                x for x in db_user.notifications if x.category == "new_performer"
+            ]
+            if not notification_exists:
                 notification = NotificationModel(
                     user_id=api_user.id, category="new_performer"
                 )
-                session.add(notification)
+                db_user.notifications.append(notification)
         if api_user.is_authed_user():
             api_authed = api_user.get_authed()
-            await self.create_or_update_auth_info(api_authed, db_user)
+            db_auth_info = await self.create_or_update_auth_info(api_authed, db_user)
             if api_authed.is_authed():
-                await db_user.activate()
+                await db_auth_info.activate()
                 if api_authed.user.is_performer():
-                    if isinstance(api_authed, AuthModel):
+                    if isinstance(api_authed, OnlyFansAuthModel):
                         mass_message_stats = await api_authed.get_mass_message_stats()
                         for mass_message_stat in mass_message_stats:
                             found_mass_message = await db_user.find_mass_message(
@@ -712,16 +813,24 @@ class SiteAPI:
                                 session.add(db_mass_message)
                             pass
                 await self.create_or_update_paid_content(api_authed, db_user, [])
-            api_subscriptions = await api_authed.get_subscriptions()
-            for api_subscription in api_subscriptions:
-                await self.create_or_update_subscription(
-                    api_subscription, db_user, optimize=True
-                )
-                pass
+            if performer_optimize:
+                api_subscriptions = await api_authed.get_subscriptions(filter_by="paid")
+            else:
+                api_subscriptions = await api_authed.get_subscriptions()
+            with alive_bar(len(api_subscriptions)) as bar:
+                for api_subscription in api_subscriptions:
+                    bar.title(
+                        f"Processing Subscription: {api_subscription.user.username} ({api_subscription.user.id})"
+                    )
+                    await self.create_or_update_subscription(
+                        api_subscription,
+                        db_user,
+                        performer_optimize=performer_optimize,
+                    )
+                    bar()
         if isinstance(api_user, OFUserModel):
             status = True
-            is_performer = api_user.is_performer()
-            if optimize and is_performer == False:
+            if performer_optimize and api_user.is_performer():
                 status = False
             if status:
                 socials = await api_user.get_socials()
@@ -732,34 +841,79 @@ class SiteAPI:
                     spotify["socialMedia"] = "spotify"
                     spotify["username"] = spotify["displayName"]
                     await db_user.add_socials([spotify])
-        for _key, contents in api_user.content_manager.categorized.__dict__.items():
+        assert self.datascraper
+        content_manager = self.datascraper.resolve_content_manager(api_user)
+        for _key, contents in content_manager.categorized.__dict__.items():
 
-            async def test(site_api: SiteAPI, db_user: UserModel, content: Any):
+            async def process_content_async(
+                site_api: SiteAPI, db_user: UserModel, content: Any
+            ):
                 try:
                     await site_api.create_or_update_content(db_user, content)
                 except Exception as _e:
                     breakpoint()
                     print(_e)
 
-            async def test2(site_api: SiteAPI, content: Any):
+            async def process_media_async(
+                site_api: SiteAPI, db_user: UserModel, media: MediaMetadata
+            ):
                 try:
-                    await site_api.create_or_update_media(content)
+                    await site_api.create_or_update_media(db_user, media)
                 except Exception as _e:
                     print(_e)
                     breakpoint()
 
-            if contents:
-                pass
-            await db_user.content_manager.init()
+            async def process_filepath_async(
+                site_api: SiteAPI, db_user: UserModel, media: MediaMetadata
+            ):
+                try:
+                    await site_api.create_or_update_filepaths(db_user, media)
+                except Exception as _e:
+                    print(_e)
+                    breakpoint()
+
             _result = await asyncio.gather(
-                *[test(self, db_user, content) for content in contents.values()],
+                *[
+                    process_content_async(self, db_user, content)
+                    for content in contents.values()
+                ],
                 return_exceptions=True,
             )
+            for content in contents.values():
+                db_content = content.__db_content__
+                if (
+                    isinstance(db_content, MassMessageModel)
+                    and content.api_type == "Messages"
+                ):
+                    session = self.get_session()
+                    stmt = delete(FilePathModel).where(
+                        FilePathModel.mass_message_id == db_content.id
+                    )
+
+                    await session.execute(stmt)
+                    pass
+                    stmt = delete(ContentMediaAssoModel).where(
+                        ContentMediaAssoModel.mass_message_id == db_content.id
+                    )
+                    await session.execute(stmt)
+                    await session.delete(db_content)
+                    await session.commit()
             await session.commit()
 
-            await db_user.content_manager.init()
             _result2 = await asyncio.gather(
-                *[test2(self, content) for content in contents.values()],
+                *[
+                    process_media_async(self, db_user, media)
+                    for content in contents.values()
+                    for media in content.medias
+                ],
+                return_exceptions=True,
+            )
+            _result2 = await asyncio.gather(
+                *[
+                    process_filepath_async(self, db_user, media)
+                    for content in contents.values()
+                    for media in content.medias
+                ],
                 return_exceptions=True,
             )
             for _, content in contents.items():
@@ -773,30 +927,47 @@ class SiteAPI:
     async def create_or_update_auth_info(
         self, api_authed: ultima_scraper_api.auth_types, db_user: UserModel
     ):
-        await db_user.awaitable_attrs.user_auth_info
-        db_user_auth_info = db_user.user_auth_info
-        if not db_user_auth_info:
+        await db_user.awaitable_attrs.user_auths_info
+        db_auth_info: UserAuthModel | None = None
+
+        auth_info = api_authed.get_auth_details()
+        for db_auth_info in db_user.user_auths_info:
+            AD = db_auth_info.convert_to_auth_details(api_authed.get_api().site_name)
+            if isinstance(auth_info, OnlyFansAuthDetails):
+                assert isinstance(AD, OnlyFansAuthDetails)
+                if auth_info.cookie.sess == AD.cookie.sess:
+                    break
+            else:
+                FYD = db_auth_info.convert_to_auth_details(
+                    api_authed.get_api().site_name
+                )
+                assert isinstance(FYD, FanslyAuthDetails)
+                if auth_info.authorization == FYD.authorization:
+                    break
+
+        if not db_auth_info:
             exported_auth_details = api_authed.get_auth_details().export(UserAuthModel)
-            user_auth_model = UserAuthModel(**exported_auth_details)
-            user_auth_model.active = user_auth_model.active
-            db_user.user_auth_info = user_auth_model
+            db_auth_info = UserAuthModel(**exported_auth_details)
+            db_auth_info.active = db_auth_info.active
+            db_user.user_auths_info.append(db_auth_info)
             pass
         else:
             exported_auth_details = api_authed.get_auth_details().export()
-            db_user.user_auth_info.update(exported_auth_details)
+            db_auth_info.update(exported_auth_details)
             pass
-        db_user.user_auth_info.email = api_authed.user.email
-        return db_user.user_auth_info
+        return db_auth_info
 
     async def create_or_update_subscription(
         self,
         subscription: ultima_scraper_api.subscription_types,
         db_authed: "UserModel",
-        optimize: bool = False,
+        performer_optimize: bool = False,
     ):
         db_sub_user = await self.get_user(subscription.user.id, load_content=True)
         db_sub_user = await self.create_or_update_user(
-            subscription.user, db_sub_user, optimize=optimize
+            subscription.user,
+            db_sub_user,
+            performer_optimize=performer_optimize,
         )
         subscription_user = subscription.user
         db_subscription = await self.get_subscription(
@@ -853,7 +1024,6 @@ class SiteAPI:
         user_info.subscribers_count = subscription_user.subscribers_count or 0
         user_info.location = subscription_user.location
         user_info.website = subscription_user.website
-        from ultima_scraper_api.apis.onlyfans.classes.user_model import create_user
 
         user_info.promotion = (
             bool(await subscription_user.get_promotions())
@@ -871,9 +1041,11 @@ class SiteAPI:
         content_manager = db_performer.content_manager
         found_db_content = await content_manager.find_content(content.content_id)
         db_content = found_db_content or await content_manager.add_content(content)
+
         content.__db_content__ = db_content
         content.paid = False
         if isinstance(db_content, PostModel | MessageModel):
+            db_content.update(content)
             if not db_content.paid:
                 db_content.paid = True if content.paid else False
                 if (
@@ -913,109 +1085,54 @@ class SiteAPI:
             db_content.verified = True
         db_content.created_at = content.created_at
 
-    async def create_or_update_media(self, content: ContentMetadata):
-        api_type = content.api_type
-        db_content = content.__db_content__
-        assert db_content
-        db_content_paid = None
-        try:
-            media_manager = db_content.user.content_manager.media_manager
-        except Exception as e:
+    async def create_or_update_media(self, db_user: UserModel, media: MediaMetadata):
+        assert media.id
+        media_manager = db_user.content_manager.media_manager
+        found_media = media_manager.find_media(media.id)
+        media_url = media.urls[0] if media.urls else None
+        if not media_url:
             return
-        if isinstance(db_content, PostModel | MessageModel):
-            db_content_paid = db_content.paid
-        for media in content.medias:
-            assert media.id
-            final_url = media.urls[0] if media.urls else None
-            found_db_media = media_manager.find_media(media.id)
-            if found_db_media:
-                db_media = found_db_media
-                if not final_url:
-                    final_url = db_media.url
-                    if final_url:
-                        # UNFINISHED
-                        # Need to find a way to rebuild media's directory, filename, etc (We can use the reformatter)
-                        # content_metadata = ContentMetadata(db_content.id, api_type)
-                        # extractor = DBContentExtractor(db_content)
-                        # extractor.__api__ = api
-                        # await content_metadata.resolve_extractor(extractor)
-                        # Remove none when solution found
-                        final_url = None
-                        pass
-            else:
-                found_global_media = media_manager.find_media(media.id)
-                if found_global_media:
-                    db_media = found_global_media
-                else:
-                    db_media = MediaModel(
-                        id=media.id,
-                        user_id=content.user_id,
-                        url=final_url,
-                        size=0,
-                        preview=media.preview,
-                        created_at=media.created_at,
-                    )
-                    media_manager.add_media(db_media)
-                try:
-                    db_content.media.append(db_media)
-                except Exception as _e:
-                    breakpoint()
-            if not final_url:
-                pass
-            if db_media.created_at and db_media.created_at.tzinfo is None:
-                db_media.created_at = db_media.created_at
-            try:
-                filepath = db_media.find_filepath(db_content.id, api_type)
-            except Exception as _e:
-                breakpoint()
-            if not filepath and final_url:
-                assert media.directory
-                assert media.filename
-                filepath = FilePathModel(
-                    # media_id=db_media.id,
-                    filepath=media.directory.joinpath(media.filename).as_posix(),
-                    preview=media.preview,
-                )
-                await filepath.set_content(db_content)
-                try:
-                    db_media.filepaths.append(filepath)
-                except Exception as _e:
-                    breakpoint()
-            if final_url:
-                if db_content_paid or (not content.paid and not content.price):
-                    # No previews get through here
-                    db_media.preview = False
-                    db_media.url = final_url
-                    assert filepath and media.directory and media.filename
-                    filepath.media_id = db_media.id
-                    filepath.filepath = media.directory.joinpath(
-                        media.filename
-                    ).as_posix()
-                    filepath.preview = False
-                else:
-                    if isinstance(db_content, PostModel | MessageModel):
-                        # Handle previews
-                        if not db_content.paid and not db_media.url:
-                            db_media.preview = True
-                            db_media.url = final_url
-                            assert filepath and media.directory and media.filename
-                            filepath.media_id = db_media.id
-                            filepath.filepath = media.directory.joinpath(
-                                media.filename
-                            ).as_posix()
-                            filepath.preview = True
-            elif db_content_paid:
-                db_media.preview = False
-                if filepath:
-                    filepath.preview = False
-            db_media.category = media.media_type
-            if media.size >= int(db_media.size):
-                db_media.size = media.size
-            media_created_at = media.created_at
-            if db_media.created_at is None or media_created_at < db_media.created_at:
-                if db_media.created_at is None:
-                    pass
-                db_media.created_at = media_created_at
+        if not found_media:
+            db_media = MediaModel(
+                id=media.id,
+                user_id=media.user_id,
+                url=media_url,
+                size=0,
+                preview=media.preview,
+                created_at=media.created_at,
+            )
+            db_user.medias.append(db_media)
+            media_manager.add_media(db_media)
+        else:
+            db_media = found_media
+            db_media.user_id = media.user_id
+        if not media.preview:
+            db_media.url = media_url
+        return db_media
+
+    async def create_or_update_filepaths(
+        self, db_user: UserModel, media: MediaMetadata
+    ):
+        assert media.id
+        db_media = db_user.content_manager.media_manager.find_media(media.id)
+        if not db_media:
+            return
+        db_content = None
+        content_metadata = media.get_content_metadata()
+        if content_metadata:
+            content_info = (content_metadata.content_id, content_metadata.api_type)
+            db_filepath = db_media.find_filepath(content_info)
+            db_content = content_metadata.__db_content__
+        else:
+            db_filepath = db_media.find_filepath()
+        if not db_filepath and media.filename:
+            filepath = media.get_filepath()
+            db_filepath = FilePathModel(
+                filepath=filepath.as_posix(), preview=media.preview
+            )
+            assert db_content
+            db_filepath.set_content(db_content)
+            db_media.filepaths.append(db_filepath)
 
     async def create_or_update_comment(self, content: ContentMetadata):
         session = self.get_session()
@@ -1049,9 +1166,11 @@ class SiteAPI:
                     session.add(db_comment)
 
     async def create_or_update_paid_content(
-        self, api_authed: AuthModel, db_user: UserModel, print_filter: list[str] = []
+        self,
+        api_authed: OnlyFansAuthModel,
+        db_user: UserModel,
+        print_filter: list[str] = [],
     ):
-        print("Getting paid content")
         paid_contents = await api_authed.get_paid_content()
         for paid_content in paid_contents:
             if isinstance(paid_content, dict):

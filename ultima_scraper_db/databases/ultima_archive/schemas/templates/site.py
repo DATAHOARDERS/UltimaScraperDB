@@ -1,11 +1,15 @@
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from inflection import singularize, underscore
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
+    Constraint,
     Float,
     ForeignKey,
+    Index,
     Integer,
     SmallInteger,
     String,
@@ -22,7 +26,13 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import async_object_session
 from sqlalchemy.ext.compiler import compiles  # type: ignore
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from ultima_scraper_api.apis.onlyfans.classes.extras import AuthDetails
+from ultima_scraper_api.apis.fansly.classes.extras import (
+    AuthDetails as FanslyAuthDetails,
+)
+from ultima_scraper_api.apis.onlyfans.classes.extras import (
+    AuthDetails as OnlyFansAuthDetails,
+)
+from ultima_scraper_collection.managers.content_manager import DefaultCategorizedContent
 
 from ultima_scraper_db.databases.ultima_archive import (
     CustomFuncs,
@@ -32,9 +42,32 @@ from ultima_scraper_db.databases.ultima_archive import (
 from ultima_scraper_db.helpers import TIMESTAMPTZ, selectin_relationship
 
 if TYPE_CHECKING:
+    from ultima_scraper_collection.managers.metadata_manager.metadata_manager import (
+        ContentMetadata,
+    )
+
     from ultima_scraper_db.databases.ultima_archive.schemas.management import SiteModel
     from ultima_scraper_db.databases.ultima_archive.site_api import ContentManager
 content_managers: dict[int, "ContentManager"] = {}
+
+standard_unique_constraints = (
+    UniqueConstraint(
+        "story_id",
+        "media_id",
+    ),
+    UniqueConstraint(
+        "post_id",
+        "media_id",
+    ),
+    UniqueConstraint(
+        "message_id",
+        "media_id",
+    ),
+    UniqueConstraint(
+        "mass_message_id",
+        "media_id",
+    ),
+)
 
 
 class UserModel(SiteTemplate):
@@ -56,7 +89,7 @@ class UserModel(SiteTemplate):
     updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMPTZ, onupdate=CustomFuncs.utcnow(), nullable=True
     )
-    user_auth_info: Mapped["UserAuthModel"] = selectin_relationship(
+    user_auths_info: Mapped[list["UserAuthModel"]] = selectin_relationship(
         back_populates="user"
     )
     user_info: Mapped["UserInfoModel"] = relationship(
@@ -76,7 +109,7 @@ class UserModel(SiteTemplate):
         "SubscriptionModel",
         foreign_keys="SubscriptionModel.user_id",
     )
-
+    favorited: Mapped["FavoriteUserModel"] = relationship(back_populates="user")
     socials: Mapped[list["SocialModel"]] = relationship(back_populates="user")
     _stories: Mapped[list["StoryModel"]] = relationship()
     _posts: Mapped[list["PostModel"]] = relationship()
@@ -100,6 +133,7 @@ class UserModel(SiteTemplate):
     supplied_contents: Mapped[list["BoughtContentModel"]] = relationship(
         foreign_keys="BoughtContentModel.supplier_id"
     )
+    notifications: Mapped[list["NotificationModel"]] = relationship()
 
     @property
     def content_manager(self):
@@ -114,8 +148,15 @@ class UserModel(SiteTemplate):
             content_manager.session = async_object_session(self)
         return content_manager
 
-    async def find_content(self):
-        pass
+    def find_auths(self, active: bool | None = True):
+        for auth in self.user_auths_info:
+            if active is not None and auth.active == active:
+                yield auth
+
+    def find_auth(self, active: bool | None = True):
+        auths = list(self.find_auths(active))
+        if auths:
+            return auths[-1]
 
     async def last_subscription_downloaded_at(self):
         session = async_object_session(self)
@@ -159,7 +200,8 @@ class UserModel(SiteTemplate):
         valid_subscribers = []
         for x in self.subscribers:
             await x.awaitable_attrs.subscriber
-            if x.subscriber.user_auth_info.active and time_now < x.expires_at:
+            db_auth = x.subscriber.find_auth()
+            if db_auth and db_auth.active and time_now < x.expires_at:
                 valid_subscribers.append(x)
         return bool(valid_subscribers)
 
@@ -205,7 +247,12 @@ class UserModel(SiteTemplate):
                     return social
 
     async def add_job(
-        self, server_id: int, category: str, site: "SiteModel", skippable: bool = False
+        self,
+        server_id: int,
+        category: str,
+        site: "SiteModel",
+        priority: bool = False,
+        skippable: bool = False,
     ):
         # Need to create algo to resolve server_id by how many videos user has
         await self.awaitable_attrs.jobs
@@ -214,6 +261,7 @@ class UserModel(SiteTemplate):
             user_username=self.username,
             category=category,
             server_id=server_id,
+            priority=priority,
             skippable=skippable,
         )
         self.jobs.append(job)
@@ -241,13 +289,13 @@ class UserModel(SiteTemplate):
                 db_bought_contents.append(bought_content)
         return db_bought_contents
 
-    async def get_supplied_content(self, active: bool = False):
+    async def get_supplied_content(self, active: bool | None = None):
         final_supplied_content: list[BoughtContentModel] = []
         await self.awaitable_attrs.supplied_contents
-        if active:
+        if active is not None:
             for supplied_content in self.supplied_contents:
                 await supplied_content.awaitable_attrs.buyer
-                if not supplied_content.buyer.user_auth_info.active:
+                if not supplied_content.buyer.find_auths():
                     continue
                 final_supplied_content.append(supplied_content)
         else:
@@ -255,13 +303,18 @@ class UserModel(SiteTemplate):
         return final_supplied_content
 
     async def find_buyers(
-        self, active: bool = False, identifiers: list[int | str] = []
+        self,
+        active: bool | None = None,
+        active_user: bool | None = None,
+        active_subscription: bool | None = None,
+        identifiers: list[int | str] = [],
     ):
+        if active is not None:
+            active_user = active
+            active_subscription = active
         temp_buyers: set[UserModel] = set()
-        await self.awaitable_attrs.user_auth_info
-        if self.user_auth_info:
-            temp_buyers.add(self)
-        for content in await self.get_supplied_content(active=active):
+        [temp_buyers.add(x.user) for x in self.find_auths()]
+        for content in await self.get_supplied_content(active=active_user):
             temp_buyers.add(await content.awaitable_attrs.buyer)
         await self.awaitable_attrs.subscribers
         session = async_object_session(self)
@@ -271,10 +324,10 @@ class UserModel(SiteTemplate):
             .join(SubscriptionModel.subscriber)
             .where(SubscriptionModel.user_id == self.id)
         )
-        if active:
-            query = query.where(SubscriptionModel.expires_at >= datetime.now()).where(
-                UserModel.user_auth_info.has(active=True)
-            )
+        if active_user:
+            query = query.where(UserModel.user_auths_info.any(active=active))
+        if active_subscription:
+            query = query.where(SubscriptionModel.expires_at >= datetime.now())
         subscribers = await session.scalars(query)
         for subscriber in subscribers:
             temp_buyers.add(subscriber)
@@ -289,15 +342,13 @@ class UserModel(SiteTemplate):
         final_buyers.sort(key=lambda buyer: (buyer.id != self.id, buyer.id))
         return final_buyers
 
-    async def activate(self):
-        self.user_auth_info.active = True
 
-    async def deactivate(self):
-        self.user_auth_info.active = False
+from ultima_scraper_api import SITE_LITERALS
 
 
 class UserAuthModel(SiteTemplate):
     __tablename__ = "user_auths"
+    __table_args__ = (UniqueConstraint("cookie", "authorization"),)
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"))
     cookie: Mapped[str] = mapped_column(Text, nullable=True)
@@ -307,25 +358,42 @@ class UserAuthModel(SiteTemplate):
     email: Mapped[str] = mapped_column(Text, nullable=True)
     password: Mapped[str] = mapped_column(Text, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, server_default="true")
-    user: Mapped[UserModel] = selectin_relationship(back_populates="user_auth_info")
+    user: Mapped[UserModel] = selectin_relationship(back_populates="user_auths_info")
 
-    def convert_to_auth_details(self):
-        return AuthDetails(
-            id=self.id,
-            username=self.user.username,
-            cookie=self.cookie,
-            x_bc=self.x_bc,
-            user_agent=self.user_agent,
-            email=self.email,
-            password=self.password,
-            active=self.user.active,
-        )
+    def convert_to_auth_details(self, site_name: SITE_LITERALS):
+        if site_name == "OnlyFans":
+            return OnlyFansAuthDetails(
+                id=self.id,
+                username=self.user.username,
+                cookie=self.cookie,
+                x_bc=self.x_bc,
+                user_agent=self.user_agent,
+                email=self.email,
+                password=self.password,
+                active=self.user.active,
+            )
+        else:
+            return FanslyAuthDetails(
+                id=self.id,
+                username=self.user.username,
+                authorization=self.authorization,
+                user_agent=self.user_agent,
+                email=self.email,
+                password=self.password,
+                active=self.user.active,
+            )
 
     def update(self, info: dict[str, Any]):
         for k, v in info.items():
             if k == "id":
                 continue
             setattr(self, k, v)
+
+    async def activate(self):
+        self.active = True
+
+    async def deactivate(self):
+        self.active = False
 
 
 class UserInfoModel(SiteTemplate):
@@ -335,26 +403,34 @@ class UserInfoModel(SiteTemplate):
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"))
     name: Mapped[str] = mapped_column(Text, nullable=True)
-    price: Mapped[int] = mapped_column(Float, server_default="0")
+    price: Mapped[int] = mapped_column(Float, server_default="0", default=0)
     description: Mapped[str] = mapped_column(Text, nullable=True)
     promotion: Mapped[bool] = mapped_column(
-        Boolean, server_default="true", default="true"
+        Boolean, server_default="true", default=True
     )
     sex: Mapped[int] = mapped_column(SmallInteger, nullable=True, index=True)
-    post_count: Mapped[int] = mapped_column(Integer, server_default="0")
-    media_count: Mapped[int] = mapped_column(Integer, server_default="0")
-    image_count: Mapped[int] = mapped_column(Integer, server_default="0")
-    video_count: Mapped[int] = mapped_column(Integer, server_default="0")
-    audio_count: Mapped[int] = mapped_column(Integer, server_default="0")
-    stream_count: Mapped[int] = mapped_column(Integer, server_default="0")
-    archived_post_count: Mapped[int] = mapped_column(Integer, server_default="0")
-    private_archived_post_count: Mapped[int] = mapped_column(
-        Integer, server_default="0"
+    post_count: Mapped[int] = mapped_column(Integer, server_default="0", default=0)
+    media_count: Mapped[int] = mapped_column(Integer, server_default="0", default=0)
+    image_count: Mapped[int] = mapped_column(Integer, server_default="0", default=0)
+    video_count: Mapped[int] = mapped_column(Integer, server_default="0", default=0)
+    audio_count: Mapped[int] = mapped_column(Integer, server_default="0", default=0)
+    stream_count: Mapped[int] = mapped_column(Integer, server_default="0", default=0)
+    archived_post_count: Mapped[int] = mapped_column(
+        Integer, server_default="0", default=0
     )
-    favourited_count: Mapped[int] = mapped_column(Integer, server_default="0")
-    favourites_count: Mapped[int] = mapped_column(Integer, server_default="0")
-    subscribers_count: Mapped[int] = mapped_column(Integer, server_default="0")
-    size: Mapped[int] = mapped_column(BigInteger, server_default="0")
+    private_archived_post_count: Mapped[int] = mapped_column(
+        Integer, server_default="0", default=0
+    )
+    favourited_count: Mapped[int] = mapped_column(
+        Integer, server_default="0", default=0
+    )
+    favourites_count: Mapped[int] = mapped_column(
+        Integer, server_default="0", default=0
+    )
+    subscribers_count: Mapped[int] = mapped_column(
+        Integer, server_default="0", default=0
+    )
+    size: Mapped[int] = mapped_column(BigInteger, server_default="0", default=0)
     location: Mapped[str] = mapped_column(Text, nullable=True)
     website: Mapped[str] = mapped_column(Text, nullable=True)
     downloaded_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, nullable=True)
@@ -371,7 +447,7 @@ class HistoUserInfoModel(SiteTemplate):
     price: Mapped[int] = mapped_column(Float, server_default="0")
     description: Mapped[str] = mapped_column(Text, nullable=True)
     promotion: Mapped[bool] = mapped_column(
-        Boolean, server_default="true", default="true"
+        Boolean, server_default="true", default=True
     )
     post_count: Mapped[int] = mapped_column(Integer, server_default="0")
     media_count: Mapped[int] = mapped_column(Integer, server_default="0")
@@ -395,11 +471,7 @@ class HistoUserInfoModel(SiteTemplate):
 
 class ContentMediaAssoModel(DefaultContentTypes, SiteTemplate):
     __tablename__ = "content_media_asso"
-    __table_args__ = (
-        UniqueConstraint(
-            "story_id", "post_id", "message_id", "mass_message_id", "media_id"
-        ),
-    )
+    __table_args__ = standard_unique_constraints
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     media: Mapped["MediaModel"] = relationship(
         "MediaModel", back_populates="content_media_assos"
@@ -409,7 +481,8 @@ class ContentMediaAssoModel(DefaultContentTypes, SiteTemplate):
         from sqlalchemy import inspect
 
         for key in inspect(ContentMediaAssoModel).columns.keys():
-            if match_value.lower() in key.lower():
+            final_match_value = singularize(underscore(match_value)).lower()
+            if final_match_value in key.lower():
                 return key
         pass
 
@@ -451,15 +524,44 @@ class MediaModel(SiteTemplate):
         back_populates="media"
     )
 
-    def find_filepath(self, content_id: int, content_type: str):
-        content_type = content_type if "Stories" != content_type else "Story"
-        from inflection import singularize, underscore
+    async def find_content(self, api_type: str):
+        content_type = api_type if api_type != "Stories" else "Story"
+        await self.awaitable_attrs.content_media_assos
+        for content_media_asso in self.content_media_assos:
+            try:
+                key = content_media_asso.get_key(content_type)
+                assert key
+                value = getattr(content_media_asso, key)
+                if value:
+                    return await content_media_asso.get_content()
+            except Exception as _e:
+                return
 
-        for filepath in self.filepaths:
+    def find_filepath(self, content_info: tuple[int, str] | None = None):
+        if content_info:
+            content_id, content_type = content_info
+            content_type = content_type if content_type != "Stories" else "Story"
             temp_type = singularize(underscore(content_type)).lower()
-            fp_content_id = getattr(filepath, f"{temp_type}_id")
-            if fp_content_id == content_id:
-                return filepath
+
+            for filepath in self.filepaths:
+                fp_content_id = getattr(filepath, f"{temp_type}_id", None)
+                if fp_content_id == content_id:
+                    return filepath
+        else:
+            content_types = DefaultCategorizedContent()
+            for temp_db_filepath in self.filepaths:
+                valid = all(
+                    not hasattr(
+                        temp_db_filepath, f"{singularize(underscore(key)).lower()}_id"
+                    )
+                    or not getattr(
+                        temp_db_filepath, f"{singularize(underscore(key)).lower()}_id"
+                    )
+                    for key, _ in content_types
+                )
+
+                if valid:
+                    return temp_db_filepath
 
 
 class ContentTemplate(SiteTemplate):
@@ -536,6 +638,7 @@ class PostModel(ContentTemplate):
     user: Mapped["UserModel"] = relationship(
         foreign_keys=user_id,
     )
+    comments: Mapped[list["CommentModel"]] = relationship()
 
     media: Mapped[list["MediaModel"]] = relationship(
         "MediaModel",
@@ -581,6 +684,9 @@ class PostModel(ContentTemplate):
             if media.id == media_id:
                 return media
 
+    def update(self, content: "ContentMetadata"):
+        pass
+
 
 class MessageModel(ContentTemplate):
     __tablename__ = "x_messages"
@@ -590,7 +696,7 @@ class MessageModel(ContentTemplate):
     receiver_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("users.id"), nullable=True
     )
-    queue_id: Mapped[int] = mapped_column(
+    queue_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("x_mass_messages.id"), nullable=True
     )
     text: Mapped[str] = mapped_column(Text, nullable=True)
@@ -618,6 +724,13 @@ class MessageModel(ContentTemplate):
         for media in self.media:
             if media.id == media_id:
                 return media
+
+    def update(self, content: "ContentMetadata"):
+        assert content.user_id
+        self.user_id = content.user_id
+        self.receiver_id = content.receiver_id
+        if content.__soft__.is_mass_message():
+            self.queue_id = content.queue_id
 
 
 class MassMessageStatModel(SiteTemplate):
@@ -702,9 +815,7 @@ class SubscriptionModel(SiteTemplate):
 
 class FilePathModel(DefaultContentTypes, SiteTemplate):
     __tablename__ = "filepaths"
-    __table_args__ = (
-        UniqueConstraint("story_id", "post_id", "message_id", "media_id"),
-    )
+    __table_args__ = standard_unique_constraints
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     filepath: Mapped[str] = mapped_column(String(255))
@@ -759,14 +870,27 @@ class JobModel(SiteTemplate):
     )
     skippable: Mapped[bool] = mapped_column(Boolean, server_default="false")
 
+    priority: Mapped[bool] = mapped_column(Boolean, server_default="false")
     active: Mapped[bool] = mapped_column(Boolean, server_default="true")
     completed_at: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ, nullable=True)
     user: Mapped[UserModel] = relationship(back_populates="jobs")
     site: Mapped["SiteModel"] = relationship(foreign_keys=site_id)
 
 
+class FavoriteUserModel(SiteTemplate):
+    __tablename__ = "favorite_users"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.id"), unique=True
+    )
+    notification: Mapped[bool] = mapped_column(Boolean, server_default="true")
+    user: Mapped[UserModel] = relationship(back_populates="favorited")
+
+
 class NotificationModel(SiteTemplate):
     __tablename__ = "notifications"
+    __table_args__ = (UniqueConstraint("user_id", "category"),)
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("users.id"), nullable=True
