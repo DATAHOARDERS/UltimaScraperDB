@@ -751,6 +751,7 @@ class SiteAPI:
         _alias = await db_user.add_alias(api_user.username)
         status = False
         if not existing_user:
+            await db_user.awaitable_attrs.user_auths_info
             if await is_notif_valuable(api_user):
                 status = True
         if existing_user:
@@ -1173,21 +1174,26 @@ class SiteAPI:
         print_filter: list[str] = [],
     ):
         paid_contents = await api_authed.get_paid_content()
-        for paid_content in paid_contents:
-            if isinstance(paid_content, dict):
-                continue
-            if any(x in paid_content.text for x in print_filter):
-                urls: list[str] = []
-                for x in paid_content.media:
-                    url: ParseResult | None = paid_content.url_picker(x)
-                    if isinstance(url, ParseResult):
-                        urls.append(url.geturl())
-                if urls:
-                    print(urls, f"{paid_content.id}\n")
-            supplier = paid_content.get_author()
-            local_user = await self.get_user(supplier.id, load_content=True)
-            await self.create_or_update_user(supplier, local_user)
-            found_bought_content = await db_user.find_bought_content(supplier.id)
-            if not found_bought_content:
-                bought_content = BoughtContentModel(supplier_id=supplier.id)
-                db_user.bought_contents.append(bought_content)
+        with alive_bar(len(paid_contents)) as bar:
+            for paid_content in paid_contents:
+                if isinstance(paid_content, dict):
+                    continue
+                bar.title(f"Processing Paid Content: {db_user.username} ({db_user.id})")
+                if any(x in paid_content.text for x in print_filter):
+                    urls: list[str] = []
+                    for x in paid_content.media:
+                        url: ParseResult | None = paid_content.url_picker(x)
+                        if isinstance(url, ParseResult):
+                            urls.append(url.geturl())
+                    if urls:
+                        print(urls, f"{paid_content.id}\n")
+                supplier = paid_content.get_author()
+                local_user = await self.get_user(
+                    supplier.id, load_content=True, load_media=True
+                )
+                await self.create_or_update_user(supplier, local_user)
+                found_bought_content = await db_user.find_bought_content(supplier.id)
+                if not found_bought_content:
+                    bought_content = BoughtContentModel(supplier_id=supplier.id)
+                    db_user.bought_contents.append(bought_content)
+                bar()
