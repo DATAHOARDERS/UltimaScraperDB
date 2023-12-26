@@ -1114,7 +1114,7 @@ class SiteAPI:
         if not media.preview:
             db_media.url = media_url
         if db_content:
-            found_media = db_content.find_media(db_media)
+            found_media = await db_content.find_media(db_media.id)
             if not found_media:
                 db_content.media.append(db_media)
         return db_media
