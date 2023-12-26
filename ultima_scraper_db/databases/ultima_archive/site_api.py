@@ -718,11 +718,11 @@ class SiteAPI:
         content_manager = self.datascraper.resolve_content_manager(api_user)
         assert found_db_user
         for media in content_manager.media_manager.medias.values():
-            db_media = await self.create_or_update_media(found_db_user, media)
+            _db_media = await self.create_or_update_media(found_db_user, media)
+            _db_filepath = await self.create_or_update_filepaths(found_db_user, media)
         _db_user = await self.create_or_update_user(
             api_user, existing_user=found_db_user, performer_optimize=True
         )
-
         current_job = api_user.get_current_job()
         if current_job:
             assert current_job
@@ -812,7 +812,7 @@ class SiteAPI:
                                     created_at=mass_message_stat.created_at,
                                     mass_message_stat=db_mass_message_stat,
                                 )
-                                session.add(db_mass_message)
+                                db_user._mass_messages.append(db_mass_message)
                             pass
                 await self.create_or_update_paid_content(api_authed, db_user, [])
             if performer_optimize:
@@ -863,8 +863,8 @@ class SiteAPI:
                     try:
                         await site_api.create_or_update_media(db_user, media)
                     except Exception as _e:
-                        print(_e)
                         breakpoint()
+                        print(_e)
 
                 async def process_filepath_async(
                     site_api: SiteAPI, db_user: UserModel, media: MediaMetadata
@@ -872,8 +872,8 @@ class SiteAPI:
                     try:
                         await site_api.create_or_update_filepaths(db_user, media)
                     except Exception as _e:
-                        print(_e)
                         breakpoint()
+                        print(_e)
 
                 _result = await asyncio.gather(
                     *[
@@ -1091,7 +1091,10 @@ class SiteAPI:
 
     async def create_or_update_media(self, db_user: UserModel, media: MediaMetadata):
         assert media.id
-        db_content = media.__content_metadata__.__db_content__
+        db_content = None
+        content_metadata = media.__content_metadata__
+        if content_metadata:
+            db_content = content_metadata.__db_content__
         media_manager = db_user.content_manager.media_manager
         found_media = media_manager.find_media(media.id)
         media_url = media.urls[0] if media.urls else None
@@ -1130,6 +1133,8 @@ class SiteAPI:
         content_metadata = media.get_content_metadata()
         if content_metadata:
             content_info = (content_metadata.content_id, content_metadata.api_type)
+
+            await db_media.awaitable_attrs.filepaths
             db_filepath = db_media.find_filepath(content_info)
             db_content = content_metadata.__db_content__
         else:
@@ -1139,9 +1144,10 @@ class SiteAPI:
             db_filepath = FilePathModel(
                 filepath=filepath.as_posix(), preview=media.preview
             )
-            assert db_content
-            db_filepath.set_content(db_content)
+            if db_content:
+                db_filepath.set_content(db_content)
             db_media.filepaths.append(db_filepath)
+        return db_filepath
 
     async def create_or_update_comment(self, content: ContentMetadata):
         session = self.get_session()
