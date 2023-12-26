@@ -44,6 +44,7 @@ from ultima_scraper_collection.managers.metadata_manager.metadata_manager import
     ContentMetadata,
     MediaMetadata,
 )
+
 from ultima_scraper_db.databases.ultima_archive.filters import AuthedInfoFilter
 from ultima_scraper_db.databases.ultima_archive.schemas.management import SiteModel
 from ultima_scraper_db.databases.ultima_archive.schemas.templates.site import (
@@ -881,6 +882,7 @@ class SiteAPI:
                     ],
                     return_exceptions=True,
                 )
+                # await session.commit()
                 for content in contents.values():
                     db_content = content.__db_content__
                     if (
@@ -900,7 +902,6 @@ class SiteAPI:
                         await session.execute(stmt)
                         await session.delete(db_content)
                         await session.commit()
-                await session.commit()
 
                 _result2 = await asyncio.gather(
                     *[
@@ -910,6 +911,7 @@ class SiteAPI:
                     ],
                     return_exceptions=True,
                 )
+                # await session.commit()
                 _result2 = await asyncio.gather(
                     *[
                         process_filepath_async(self, db_user, media)
@@ -1089,6 +1091,7 @@ class SiteAPI:
 
     async def create_or_update_media(self, db_user: UserModel, media: MediaMetadata):
         assert media.id
+        db_content = media.__content_metadata__.__db_content__
         media_manager = db_user.content_manager.media_manager
         found_media = media_manager.find_media(media.id)
         media_url = media.urls[0] if media.urls else None
@@ -1110,6 +1113,10 @@ class SiteAPI:
             db_media.user_id = media.user_id
         if not media.preview:
             db_media.url = media_url
+        if db_content:
+            found_media = db_content.find_media(db_media)
+            if not found_media:
+                db_content.media.append(db_media)
         return db_media
 
     async def create_or_update_filepaths(
