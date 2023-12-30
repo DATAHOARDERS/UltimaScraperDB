@@ -785,6 +785,9 @@ class SiteAPI:
                 if api_authed.user.is_performer():
                     if isinstance(api_authed, OnlyFansAuthModel):
                         mass_message_stats = await api_authed.get_mass_message_stats()
+                        mass_message_stat_collection: dict[
+                            int, MassMessageStatModel
+                        ] = {}
                         for mass_message_stat in mass_message_stats:
                             found_mass_message = await db_user.find_mass_message(
                                 mass_message_stat.id
@@ -796,13 +799,17 @@ class SiteAPI:
                                 )
                                 purchased_count = mass_message_stat.purchased_count
                                 price = mass_message_stat.price
-                                db_mass_message_stat = MassMessageStatModel(
-                                    id=mass_message_stat.id,
-                                    media_count=media_count,
-                                    buyer_count=purchased_count,
-                                    sent_count=mass_message_stat.sent_count,
-                                    view_count=mass_message_stat.viewed_count,
+                                db_mass_message_stat = mass_message_stat_collection.get(
+                                    mass_message_stat.id
                                 )
+                                if not db_mass_message_stat:
+                                    db_mass_message_stat = MassMessageStatModel(
+                                        id=mass_message_stat.id,
+                                        media_count=media_count,
+                                        buyer_count=purchased_count,
+                                        sent_count=mass_message_stat.sent_count,
+                                        view_count=mass_message_stat.viewed_count,
+                                    )
                                 db_mass_message = MassMessageModel(
                                     id=db_mass_message_stat.id,
                                     user_id=db_user.id,
