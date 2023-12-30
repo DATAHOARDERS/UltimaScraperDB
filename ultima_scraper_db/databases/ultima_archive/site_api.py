@@ -805,6 +805,7 @@ class SiteAPI:
                                 if not db_mass_message_stat:
                                     db_mass_message_stat = MassMessageStatModel(
                                         id=mass_message_stat.id,
+                                        user_id=db_user.id,
                                         media_count=media_count,
                                         buyer_count=purchased_count,
                                         sent_count=mass_message_stat.sent_count,
@@ -1001,6 +1002,14 @@ class SiteAPI:
             db_subscription.paid_content = bool(
                 await subscription_user.get_paid_contents()
             )
+        db_subscription.created_at = datetime.fromisoformat(
+            subscription.subscribed_by_data["subscribeAt"]
+        )
+        db_subscription.renewed_at = (
+            datetime.fromisoformat(subscription.subscribed_by_data["renewedAt"])
+            if subscription.subscribed_by_data["renewedAt"]
+            else None
+        )
         db_subscription.expires_at = subscription.resolve_expires_at()
         db_subscription.active = subscription.is_active()
         return db_subscription
