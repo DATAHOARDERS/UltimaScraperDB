@@ -111,6 +111,9 @@ class UserModel(SiteTemplate):
     )
     favorited: Mapped["FavoriteUserModel"] = relationship(back_populates="user")
     socials: Mapped[list["SocialModel"]] = relationship(back_populates="user")
+    mass_message_stats: Mapped[list["MassMessageStatModel"]] = relationship(
+        back_populates="user"
+    )
     _stories: Mapped[list["StoryModel"]] = relationship()
     _posts: Mapped[list["PostModel"]] = relationship()
     _messages: Mapped[list["MessageModel"]] = relationship(
@@ -324,10 +327,10 @@ class UserModel(SiteTemplate):
             .join(SubscriptionModel.subscriber)
             .where(SubscriptionModel.user_id == self.id)
         )
-        if active_user:
-            query = query.where(UserModel.user_auths_info.any(active=active))
         if active_subscription:
             query = query.where(SubscriptionModel.expires_at >= datetime.now())
+        if active_user:
+            query = query.where(UserModel.user_auths_info.any(active=active_user))
         subscribers = await session.scalars(query)
         for subscriber in subscribers:
             temp_buyers.add(subscriber)
@@ -736,10 +739,12 @@ class MessageModel(ContentTemplate):
 class MassMessageStatModel(SiteTemplate):
     __tablename__ = "mass_message_stats"
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"))
     media_count: Mapped[int] = mapped_column(SmallInteger)
     buyer_count: Mapped[int] = mapped_column(SmallInteger)
     sent_count: Mapped[int] = mapped_column(Integer)
     view_count: Mapped[int] = mapped_column(Integer)
+    user: Mapped[UserModel] = relationship(back_populates="mass_message_stats")
 
 
 class MassMessageModel(ContentTemplate):
@@ -801,6 +806,8 @@ class SubscriptionModel(SiteTemplate):
     active: Mapped[bool] = mapped_column(Boolean, server_default="true")
     downloaded_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, nullable=True)
     expires_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ)
+    renewed_at: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ)
 
     user: Mapped["UserModel"] = relationship(
         "UserModel",
