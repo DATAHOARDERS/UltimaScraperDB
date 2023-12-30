@@ -974,7 +974,9 @@ class SiteAPI:
         db_authed: "UserModel",
         performer_optimize: bool = False,
     ):
-        db_sub_user = await self.get_user(subscription.user.id, load_content=True)
+        db_sub_user = await self.get_user(
+            subscription.user.id, load_content=True, load_media=True
+        )
         db_sub_user = await self.create_or_update_user(
             subscription.user,
             db_sub_user,
