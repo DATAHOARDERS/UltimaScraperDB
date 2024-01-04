@@ -1204,6 +1204,7 @@ class SiteAPI:
         db_user: UserModel,
         print_filter: list[str] = [],
     ):
+        unique_user_ids: set[int] = set()
         paid_contents = await api_authed.get_paid_content()
         with alive_bar(len(paid_contents)) as bar:
             for paid_content in paid_contents:
@@ -1227,4 +1228,23 @@ class SiteAPI:
                 if not found_bought_content:
                     bought_content = BoughtContentModel(supplier_id=supplier.id)
                     db_user.bought_contents.append(bought_content)
+                unique_user_ids.add(supplier.id)
                 bar()
+        await self.get_session().commit()
+        for user_id in unique_user_ids:
+            db_supplier = await self.get_user(user_id)
+            assert db_supplier
+            await db_supplier.awaitable_attrs.notifications
+            notification_exists = [
+                x for x in db_supplier.notifications if x.category == "paid_content"
+            ]
+            if not notification_exists:
+                notification = NotificationModel(
+                    user_id=db_supplier.id, category="paid_content"
+                )
+                db_supplier.notifications.append(notification)
+            else:
+                notification = notification_exists[0]
+                notification.sent_discord = False
+                notification.sent_telegram = False
+        await self.get_session().commit()
