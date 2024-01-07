@@ -1759,13 +1759,13 @@ test = ["enum34", "ipaddress", "mock", "pywin32", "wmi"]
 
 [[package]]
 name = "psycopg"
-version = "3.1.16"
+version = "3.1.17"
 description = "PostgreSQL database adapter for Python"
 optional = false
 python-versions = ">=3.7"
 files = [
-    {file = "psycopg-3.1.16-py3-none-any.whl", hash = "sha256:0bfe9741f4fb1c8115cadd8fe832fa91ac277e81e0652ff7fa1400f0ef0f59ba"},
-    {file = "psycopg-3.1.16.tar.gz", hash = "sha256:a34d922fd7df3134595e71c3428ba6f1bd5f4968db74857fe95de12db2d6b763"},
+    {file = "psycopg-3.1.17-py3-none-any.whl", hash = "sha256:96b7b13af6d5a514118b759a66b2799a8a4aa78675fa6bb0d3f7d52d67eff002"},
+    {file = "psycopg-3.1.17.tar.gz", hash = "sha256:437e7d7925459f21de570383e2e10542aceb3b9cb972ce957fdd3826ca47edc6"},
 ]
 
 [package.dependencies]
@@ -1773,8 +1773,8 @@ typing-extensions = ">=4.1"
 tzdata = {version = "*", markers = "sys_platform == \"win32\""}
 
 [package.extras]
-binary = ["psycopg-binary (==3.1.16)"]
-c = ["psycopg-c (==3.1.16)"]
+binary = ["psycopg-binary (==3.1.17)"]
+c = ["psycopg-c (==3.1.17)"]
 dev = ["black (>=23.1.0)", "codespell (>=2.2)", "dnspython (>=2.1)", "flake8 (>=4.0)", "mypy (>=1.4.1)", "types-setuptools (>=57.4)", "wheel (>=0.37)"]
 docs = ["Sphinx (>=5.0)", "furo (==2022.6.21)", "sphinx-autobuild (>=2021.3.14)", "sphinx-autodoc-typehints (>=1.12)"]
 pool = ["psycopg-pool"]
@@ -2374,13 +2374,13 @@ files = [
 
 [[package]]
 name = "ultima-scraper-api"
-version = "2.2.0"
+version = "2.2.2"
 description = ""
 optional = false
 python-versions = ">=3.10,<3.12"
 files = [
-    {file = "ultima_scraper_api-2.2.0-py3-none-any.whl", hash = "sha256:9e67aa6072f4030b65dbbd3778c09903ee2b4d24083dad0d271d44fea3cda60d"},
-    {file = "ultima_scraper_api-2.2.0.tar.gz", hash = "sha256:f8d264d136d6d4365a3e2ae617debabf9f368b277458f79f71f26f5db568a4a1"},
+    {file = "ultima_scraper_api-2.2.2-py3-none-any.whl", hash = "sha256:eea7afe708401873933bf6eaa6e95b2c9024b3c75dfe7e7d7cb06a63769501dc"},
+    {file = "ultima_scraper_api-2.2.2.tar.gz", hash = "sha256:ffea5543fd9aee58314f9385f98ad14889270f4bc635fee5e91a456d0358e215"},
 ]
 
 [package.dependencies]
@@ -2405,13 +2405,13 @@ xmltodict = ">=0.13.0,<0.14.0"
 
 [[package]]
 name = "ultima-scraper-collection"
-version = "2.1.6"
+version = "2.1.8"
 description = ""
 optional = false
 python-versions = ">=3.10,<3.12"
 files = [
-    {file = "ultima_scraper_collection-2.1.6-py3-none-any.whl", hash = "sha256:4a8d83c99f2d70246814d36ae2b0ccd2450f88714cf5623a68137301ff88d10a"},
-    {file = "ultima_scraper_collection-2.1.6.tar.gz", hash = "sha256:730b51a8ba1fd8ad6e875ef92d37b35bb3b117288f2b6708567ca68ed3e9d4f0"},
+    {file = "ultima_scraper_collection-2.1.8-py3-none-any.whl", hash = "sha256:b226c5b435c2fc9281408de9df56399d6dbc77a235b437adedd4448d3a708e87"},
+    {file = "ultima_scraper_collection-2.1.8.tar.gz", hash = "sha256:378c874562ccab54d05da97624aea8982febc0bc07b2df815a95ccbbf2532cb8"},
 ]
 
 [package.dependencies]
