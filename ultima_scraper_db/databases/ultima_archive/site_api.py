@@ -1167,6 +1167,7 @@ class SiteAPI:
         else:
             db_media = found_media
             db_media.user_id = media.user_id
+            db_media.created_at = media.created_at
         if not media.preview:
             db_media.url = media_url
         if db_content:
