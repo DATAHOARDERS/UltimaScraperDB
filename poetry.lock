@@ -2405,13 +2405,13 @@ xmltodict = ">=0.13.0,<0.14.0"
 
 [[package]]
 name = "ultima-scraper-collection"
-version = "2.1.8"
+version = "2.1.9"
 description = ""
 optional = false
 python-versions = ">=3.10,<3.12"
 files = [
-    {file = "ultima_scraper_collection-2.1.8-py3-none-any.whl", hash = "sha256:b226c5b435c2fc9281408de9df56399d6dbc77a235b437adedd4448d3a708e87"},
-    {file = "ultima_scraper_collection-2.1.8.tar.gz", hash = "sha256:378c874562ccab54d05da97624aea8982febc0bc07b2df815a95ccbbf2532cb8"},
+    {file = "ultima_scraper_collection-2.1.9-py3-none-any.whl", hash = "sha256:bd320c39dce2a98a4a9fc90cdd953aab736a5ba04080e957f09a133bc92fe9fb"},
+    {file = "ultima_scraper_collection-2.1.9.tar.gz", hash = "sha256:5240bd162ff0df84301d9831bb0fde5b2984de9b3ec59c6a783ade64a73f8b6b"},
 ]
 
 [package.dependencies]

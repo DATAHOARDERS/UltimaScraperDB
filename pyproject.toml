@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "ultima-scraper-db"
-version = "0.2.8"
+version = "0.2.9"
 description = ""
 authors = [
     "UltimaHoarder <1285176+UltimaHoarder@users.noreply.github.com>",
