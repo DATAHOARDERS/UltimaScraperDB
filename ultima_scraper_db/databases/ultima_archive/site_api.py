@@ -778,6 +778,8 @@ class SiteAPI:
             await db_user.content_manager.init()
         await session.commit()
 
+        await db_user.awaitable_attrs.medias
+
         db_user_info = await self.create_or_update_user_info(api_user, db_user)
         _alias = await db_user.add_alias(api_user.username)
         status = False
