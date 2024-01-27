@@ -467,6 +467,15 @@ class SiteAPI:
     async def __aexit__(self, exc_type, exc_value, traceback):
         await self._session.commit()
         await self._session.aclose()
+        if self.datascraper:
+            await self.datascraper.server_manager.ultima_archive_db_api.management_schema.session.aclose()
+
+            for (
+                site_api
+            ) in (
+                self.datascraper.server_manager.ultima_archive_db_api.site_apis.values()
+            ):
+                await site_api.schema.session.aclose()
 
     def get_session(self):
         assert self._session, "Session has not been set"
