@@ -66,6 +66,7 @@ from ultima_scraper_db.databases.ultima_archive.schemas.templates.site import (
     UserAuthModel,
     UserInfoModel,
     UserModel,
+    content_managers,
     content_models,
 )
 from ultima_scraper_db.managers.database_manager import Schema
@@ -114,6 +115,7 @@ def create_options(
         joined_options.append(stmt)
     return joined_options
 
+
 def fix_missing_paid_content(
     db_content: PostModel | MessageModel,
     content: ContentMetadata,
@@ -137,6 +139,7 @@ def fix_missing_paid_content(
                 valid_local_media_count += 1
         if valid_local_media_count == content.__soft__.media_count:
             db_content.paid = True
+
 
 class FilePathManager:
     def __init__(self, content_manager: "ContentManager") -> None:
@@ -164,7 +167,6 @@ class MediaManager:
 
     async def init(self, media_ids: list[int] = []):
         user = self.content_manager.__user__
-        await user.awaitable_attrs.medias
         for media in user.medias:
             self.medias[media.id] = media
         # remove duplicate ids from media_ids by self.media_ids
@@ -255,7 +257,9 @@ class ContentManager:
             # if not hasattr(self, content_type.lower()):
             #     empty_list: content_model_types = []
             #     return empty_list
-            result: list[content_model_types] = getattr(self, content_type.lower())
+            result: list[content_model_types] = getattr(
+                self, underscore(content_type).lower()
+            )
             return result
         return self.stories + self.posts + self.messages + self.mass_messages
 
@@ -316,8 +320,9 @@ class ContentManager:
     async def find_content(
         self,
         content_id: int,
+        content_type: str | None = None,
     ):
-        temp_contents = await self.get_contents()
+        temp_contents = await self.get_contents(content_type=content_type)
         for content in temp_contents:
             if content.id == content_id:
                 return content
@@ -1052,35 +1057,35 @@ class SiteAPI:
     ):
         if self.datascraper:
             content_manager = self.datascraper.resolve_content_manager(api_user)
+
+            async def process_content_async(
+                site_api: SiteAPI, db_user: UserModel, content: Any
+            ):
+                try:
+                    await site_api.create_or_update_content(db_user, content)
+                except Exception as _e:
+                    breakpoint()
+                    print(_e)
+
+            async def process_media_async(
+                site_api: SiteAPI, db_user: UserModel, media: MediaMetadata
+            ):
+                try:
+                    await site_api.create_or_update_media(db_user, media)
+                except Exception as _e:
+                    breakpoint()
+                    print(_e)
+
+            async def process_filepath_async(
+                site_api: SiteAPI, db_user: UserModel, media: MediaMetadata
+            ):
+                try:
+                    await site_api.create_or_update_filepaths(db_user, media)
+                except Exception as _e:
+                    breakpoint()
+                    print(_e)
+
             for _key, contents in content_manager.categorized.__dict__.items():
-
-                async def process_content_async(
-                    site_api: SiteAPI, db_user: UserModel, content: Any
-                ):
-                    try:
-                        await site_api.create_or_update_content(db_user, content)
-                    except Exception as _e:
-                        breakpoint()
-                        print(_e)
-
-                async def process_media_async(
-                    site_api: SiteAPI, db_user: UserModel, media: MediaMetadata
-                ):
-                    try:
-                        await site_api.create_or_update_media(db_user, media)
-                    except Exception as _e:
-                        breakpoint()
-                        print(_e)
-
-                async def process_filepath_async(
-                    site_api: SiteAPI, db_user: UserModel, media: MediaMetadata
-                ):
-                    try:
-                        await site_api.create_or_update_filepaths(db_user, media)
-                    except Exception as _e:
-                        breakpoint()
-                        print(_e)
-
                 _result = await asyncio.gather(
                     *[
                         process_content_async(self, db_user, content)
@@ -1091,6 +1096,7 @@ class SiteAPI:
                 # await session.commit()
                 for content in contents.values():
                     db_content = content.__db_content__
+                    await db_content.awaitable_attrs.media
                     if (
                         isinstance(db_content, MassMessageModel)
                         and content.api_type == "Messages"
@@ -1130,13 +1136,25 @@ class SiteAPI:
                     await self.create_or_update_comment(content)
                 session = self.get_session()
                 await session.commit()
+                for content in contents.values():
+                    db_content = content.__db_content__
+                    await db_content.awaitable_attrs.media
 
     async def create_or_update_content(
         self, db_performer: UserModel, content: ContentMetadata
     ):
         api_performer = content.__soft__.get_author()
+        receiver_id = content.receiver_id
         content_manager = db_performer.content_manager
-        found_db_content = await content_manager.find_content(content.content_id)
+        found_db_content = await content_manager.find_content(
+            content.content_id, content_type=content.api_type
+        )
+        if (
+            isinstance(found_db_content, MessageModel)
+            and found_db_content.receiver_id != api_performer.id
+            and found_db_content.receiver_id != receiver_id
+        ):
+            raise Exception("Message receiver id mismatch")
         db_content = found_db_content or await content_manager.add_content(content)
 
         content.__db_content__ = db_content
@@ -1182,7 +1200,10 @@ class SiteAPI:
                 preview=media.preview,
                 created_at=media.created_at,
             )
-            db_user.medias.append(db_media)
+            try:
+                db_user.medias.append(db_media)
+            except Exception as _e:
+                pass
             media_manager.add_media(db_media)
         else:
             db_media = found_media
@@ -1193,7 +1214,10 @@ class SiteAPI:
         if db_content:
             found_media = await db_content.find_media(db_media.id)
             if not found_media:
-                db_content.media.append(db_media)
+                try:
+                    db_content.media.append(db_media)
+                except Exception as _e:
+                    pass
         return db_media
 
     async def create_or_update_filepaths(
