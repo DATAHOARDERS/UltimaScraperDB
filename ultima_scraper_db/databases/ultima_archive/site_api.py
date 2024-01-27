@@ -114,6 +114,29 @@ def create_options(
         joined_options.append(stmt)
     return joined_options
 
+def fix_missing_paid_content(
+    db_content: PostModel | MessageModel,
+    content: ContentMetadata,
+    datascraper: "datascraper_types",
+    api_performer: ultima_scraper_api.user_types,
+):
+    if bool(db_content.paid) == False and content.price and content.price > 0:
+        fmu = datascraper.filesystem_manager.get_file_manager(api_performer.id)
+        valid_local_media_count = 0
+        for file in fmu.files:
+            remote_media_date = content.__soft__.created_at
+            remote_post_date = content.__soft__.created_at
+            stat = file.stat()
+            mt = stat.st_mtime
+            local_media_date = datetime.fromtimestamp(mt).replace(microsecond=0)
+            local_post_date = datetime.fromtimestamp(mt).replace(microsecond=0)
+            if (
+                local_media_date == remote_media_date
+                or local_post_date == remote_post_date
+            ):
+                valid_local_media_count += 1
+        if valid_local_media_count == content.__soft__.media_count:
+            db_content.paid = True
 
 class FilePathManager:
     def __init__(self, content_manager: "ContentManager") -> None:
@@ -1113,34 +1136,14 @@ class SiteAPI:
             db_content.update(content)
             if not db_content.paid:
                 db_content.paid = True if content.paid else False
-                if (
-                    bool(db_content.paid) == False
-                    and content.price
-                    and content.price > 0
-                ):
-                    assert self.datascraper
-                    fmu = self.datascraper.filesystem_manager.get_file_manager(
-                        api_performer.id
-                    )
-                    valid_local_media_count = 0
-                    for file in fmu.files:
-                        remote_media_date = content.__soft__.created_at
-                        remote_post_date = content.__soft__.created_at
-                        stat = file.stat()
-                        mt = stat.st_mtime
-                        local_media_date = datetime.fromtimestamp(mt).replace(
-                            microsecond=0
-                        )
-                        local_post_date = datetime.fromtimestamp(mt).replace(
-                            microsecond=0
-                        )
-                        if (
-                            local_media_date == remote_media_date
-                            or local_post_date == remote_post_date
-                        ):
-                            valid_local_media_count += 1
-                    if valid_local_media_count == content.__soft__.media_count:
-                        db_content.paid = True
+
+                assert self.datascraper
+                # fix_missing_paid_content(
+                #     db_content,
+                #     content,
+                #     datascraper=self.datascraper,
+                #     api_performer=api_performer,
+                # )
             db_content.price = content.price or 0
         if content.preview_media_ids:
             if "poll" not in content.preview_media_ids:
