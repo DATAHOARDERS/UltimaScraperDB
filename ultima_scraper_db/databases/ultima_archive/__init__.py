@@ -17,7 +17,6 @@ if TYPE_CHECKING:
     )
 
     content_model_types = StoryModel | PostModel | MessageModel | MassMessageModel
-    pass
 
 
 class CustomFuncs:

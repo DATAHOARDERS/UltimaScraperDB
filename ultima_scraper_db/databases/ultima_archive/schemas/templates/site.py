@@ -32,8 +32,6 @@ from ultima_scraper_api.apis.fansly.classes.extras import (
 from ultima_scraper_api.apis.onlyfans.classes.extras import (
     AuthDetails as OnlyFansAuthDetails,
 )
-from ultima_scraper_collection.managers.content_manager import DefaultCategorizedContent
-
 from ultima_scraper_db.databases.ultima_archive import (
     CustomFuncs,
     DefaultContentTypes,
@@ -45,7 +43,6 @@ if TYPE_CHECKING:
     from ultima_scraper_collection.managers.metadata_manager.metadata_manager import (
         ContentMetadata,
     )
-
     from ultima_scraper_db.databases.ultima_archive.schemas.management import SiteModel
     from ultima_scraper_db.databases.ultima_archive.site_api import ContentManager
 content_managers: dict[int, "ContentManager"] = {}
@@ -551,6 +548,10 @@ class MediaModel(SiteTemplate):
                 if fp_content_id == content_id:
                     return filepath
         else:
+            from ultima_scraper_collection.managers.content_manager import (
+                DefaultCategorizedContent,
+            )
+
             content_types = DefaultCategorizedContent()
             for temp_db_filepath in self.filepaths:
                 valid = all(
@@ -593,7 +594,6 @@ class StoryModel(ContentTemplate):
     )
 
     async def find_media(self, media_id: int):
-        await self.awaitable_attrs.media
         for media in self.media:
             if media.id == media_id:
                 return media
@@ -682,7 +682,6 @@ class PostModel(ContentTemplate):
     )
 
     async def find_media(self, media_id: int):
-        await self.awaitable_attrs.media
         for media in self.media:
             if media.id == media_id:
                 return media
@@ -723,7 +722,6 @@ class MessageModel(ContentTemplate):
     )
 
     async def find_media(self, media_id: int):
-        await self.awaitable_attrs.media
         for media in self.media:
             if media.id == media_id:
                 return media
@@ -775,7 +773,6 @@ class MassMessageModel(ContentTemplate):
     )
 
     async def find_media(self, media_id: int):
-        await self.awaitable_attrs.media
         for media in self.media:
             if media.id == media_id:
                 return media
