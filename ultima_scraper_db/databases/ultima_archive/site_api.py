@@ -608,7 +608,10 @@ class SiteAPI:
         if paid is not None:
             stmt = stmt.where(PostModel.paid == paid)
         if text is not None:
-            stmt = stmt.where(PostModel.text.contains(text))
+            text_list = text.split(",")
+            for text_item in text_list:
+                text_item = text_item.strip()
+                stmt = stmt.where(PostModel.text.icontains(text_item))
         stmt = stmt.options(joinedload(PostModel.user))
         found_posts = await self.get_session().scalars(stmt)
         return found_posts.all()
@@ -623,7 +626,10 @@ class SiteAPI:
         if paid is not None:
             stmt = stmt.where(MessageModel.paid == paid)
         if text is not None:
-            stmt = stmt.where(MessageModel.text.contains(text))
+            text_list = text.split(",")
+            for text_item in text_list:
+                text_item = text_item.strip()
+                stmt = stmt.where(MessageModel.text.icontains(text_item))
         stmt = stmt.options(joinedload(MessageModel.user))
         found_contents = await self.get_session().scalars(stmt)
         return found_contents.all()
