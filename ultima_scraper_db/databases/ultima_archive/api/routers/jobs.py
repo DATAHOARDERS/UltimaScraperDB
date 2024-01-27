@@ -2,7 +2,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 from sqlalchemy import or_, orm, select, update
 from sqlalchemy.orm import contains_eager, lazyload, sessionmaker
-
 from ultima_scraper_db.databases.ultima_archive.api.client import UAClient
 from ultima_scraper_db.databases.ultima_archive.schemas.templates.site import (
     FilePathModel,
@@ -51,7 +50,7 @@ async def get_jobs(
     async with site_api as site_api:
         limit = 100 if limit > 100 else limit
         jobs = await site_api.get_jobs(
-            category=job_type.category, page=page, limit=limit
+            category=job_type.category, page=page, limit=limit, active=job_type.active
         )
     return jobs
 

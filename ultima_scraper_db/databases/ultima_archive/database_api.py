@@ -1,5 +1,6 @@
 from ultima_scraper_api import SUPPORTED_SITES
 
+from ultima_scraper_db.databases.ultima_archive.api.client import UAClient
 from ultima_scraper_db.databases.ultima_archive.filters import AuthedInfoFilter
 from ultima_scraper_db.databases.ultima_archive.site_api import SiteAPI
 from ultima_scraper_db.managers.database_manager import Database, DatabaseAPI_, Schema
@@ -16,6 +17,7 @@ class ArchiveAPI(DatabaseAPI_):
             self.site_apis[supported_site] = SiteAPI(
                 self.database.schemas[supported_site]
             )
+        self.fast_api = UAClient(database_api=self)
 
     async def init(self):
         from ultima_scraper_collection.managers.server_manager import ServerManager
