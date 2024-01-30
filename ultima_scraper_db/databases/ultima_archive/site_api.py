@@ -44,7 +44,6 @@ from ultima_scraper_collection.managers.metadata_manager.metadata_manager import
     ContentMetadata,
     MediaMetadata,
 )
-
 from ultima_scraper_db.databases.ultima_archive.filters import AuthedInfoFilter
 from ultima_scraper_db.databases.ultima_archive.schemas.management import SiteModel
 from ultima_scraper_db.databases.ultima_archive.schemas.templates.site import (
@@ -469,18 +468,9 @@ class SiteAPI:
         self._session: AsyncSession = self.schema.sessionmaker()
         return self
 
-    async def __aexit__(self, exc_type, exc_value, traceback):
+    async def __aexit__(self, exc_type: None, exc_value: None, traceback: None):
         await self._session.commit()
         await self._session.aclose()
-        if self.datascraper:
-            await self.datascraper.server_manager.ultima_archive_db_api.management_schema.session.aclose()
-
-            for (
-                site_api
-            ) in (
-                self.datascraper.server_manager.ultima_archive_db_api.site_apis.values()
-            ):
-                await site_api.schema.session.aclose()
 
     def get_session(self):
         assert self._session, "Session has not been set"
@@ -913,6 +903,7 @@ class SiteAPI:
                         performer_optimize=performer_optimize,
                     )
                     bar()
+                pass
         if isinstance(api_user, OFUserModel):
             status = True
             if performer_optimize and api_user.is_performer():
@@ -1008,6 +999,7 @@ class SiteAPI:
         )
         db_subscription.expires_at = subscription.resolve_expires_at()
         db_subscription.active = subscription.is_active()
+        await self.get_session().commit()
         return db_subscription
 
     async def create_or_update_user_info(
