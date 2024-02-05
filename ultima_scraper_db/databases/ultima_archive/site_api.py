@@ -1,30 +1,19 @@
 import asyncio
-from datetime import datetime, timedelta
+import gc
+import weakref
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Type
 from urllib.parse import ParseResult
 
 import ultima_scraper_api
-from alive_progress import alive_bar
-from inflection import singularize, underscore
-from sqlalchemy import (
-    BigInteger,
-    Boolean,
-    ScalarResult,
-    Select,
-    SmallInteger,
-    Text,
-    UnaryExpression,
-    delete,
-    or_,
-    orm,
-    select,
-)
+from alive_progress import alive_bar  # type: ignore
+from inflection import underscore
+from sqlalchemy import ScalarResult, Select, UnaryExpression, delete, or_, orm, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.ext.asyncio.session import async_object_session
-from sqlalchemy.orm import joinedload, selectinload, subqueryload
+from sqlalchemy.orm import joinedload, selectinload
 from sqlalchemy.sql import and_, exists, func, select, union_all
-from ultima_scraper_api.apis.fansly.classes.auth_model import FanslyAuthModel
 from ultima_scraper_api.apis.fansly.classes.extras import (
     AuthDetails as FanslyAuthDetails,
 )
@@ -38,12 +27,13 @@ from ultima_scraper_api.apis.onlyfans.classes.extras import (
 from ultima_scraper_api.apis.onlyfans.classes.user_model import (
     create_user as OFUserModel,
 )
-from ultima_scraper_api.helpers.main_helper import date_between_cur_month, split_string
-from ultima_scraper_collection.helpers.main_helper import is_notif_valuable, is_valuable
+from ultima_scraper_api.helpers.main_helper import split_string
+from ultima_scraper_collection.helpers.main_helper import is_notif_valuable
 from ultima_scraper_collection.managers.metadata_manager.metadata_manager import (
     ContentMetadata,
     MediaMetadata,
 )
+
 from ultima_scraper_db.databases.ultima_archive.filters import AuthedInfoFilter
 from ultima_scraper_db.databases.ultima_archive.schemas.management import SiteModel
 from ultima_scraper_db.databases.ultima_archive.schemas.templates.site import (
@@ -65,8 +55,6 @@ from ultima_scraper_db.databases.ultima_archive.schemas.templates.site import (
     UserAuthModel,
     UserInfoModel,
     UserModel,
-    content_managers,
-    content_models,
 )
 from ultima_scraper_db.managers.database_manager import Schema
 
@@ -77,7 +65,7 @@ if TYPE_CHECKING:
     from ultima_scraper_collection import datascraper_types
 
 from sqlalchemy import inspect
-from sqlalchemy.orm.strategy_options import _AbstractLoad
+from sqlalchemy.orm.strategy_options import _AbstractLoad  # type: ignore
 
 
 def create_options(
@@ -145,7 +133,7 @@ class FilePathManager:
         self.content_manager = content_manager
         self.filepaths: dict[int, FilePathModel] = {
             filepath.id: filepath
-            for media in self.content_manager.media_manager.medias.values()
+            for media in content_manager.media_manager.medias.values()
             for filepath in media.filepaths
         }
         self._filepaths_str: dict[str, FilePathModel] = {
@@ -165,7 +153,8 @@ class MediaManager:
         self.medias: dict[int, MediaModel] = {}
 
     async def init(self, media_ids: list[int] = []):
-        user = self.content_manager.__user__
+        content_manager = self.content_manager
+        user = content_manager.__user__
         for media in user.medias:
             self.medias[media.id] = media
         # remove duplicate ids from media_ids by self.media_ids
@@ -179,11 +168,11 @@ class MediaManager:
                     joinedload(MediaModel.content_media_assos),
                 )
             )
-            assert self.content_manager.session
-            found_medias = await self.content_manager.session.scalars(stmt)
+            assert content_manager.session
+            found_medias = await content_manager.session.scalars(stmt)
             for media in found_medias.unique():
                 self.medias[media.id] = media
-        self.filepath_manager = FilePathManager(self.content_manager)
+        self.filepath_manager = FilePathManager(content_manager)
 
     def find_media(self, media_id: int):
         try:
@@ -205,7 +194,7 @@ class ContentManager:
         self.lock = asyncio.Lock()
         self.media_manager = MediaManager(self)
 
-    async def init(self, media_ids: list[int] = []):
+    async def init(self, load_media: bool = False, media_ids: list[int] = []):
         await self.__user__.awaitable_attrs._stories
         await self.__user__.awaitable_attrs._posts
         await self.__user__.awaitable_attrs._messages
@@ -240,9 +229,8 @@ class ContentManager:
             for content in self.mass_messages
             for item in await content.awaitable_attrs.media
         ]
-        if media_ids:
-            pass
-        await media_manager.init(media_ids=media_ids)
+        if load_media:
+            await media_manager.init(media_ids=media_ids)
         return self
 
     def get_media_manager(self):
@@ -277,7 +265,7 @@ class ContentManager:
                     user_id=content.user_id,
                     text=content.text,
                     price=content.price,
-                    paid=int(content.paid),
+                    paid=int(bool(content.paid)),
                     created_at=content.__soft__.created_at,
                 )
                 self.posts.append(content_model)
@@ -291,7 +279,7 @@ class ContentManager:
                     receiver_id=content.receiver_id,
                     text=content.text,
                     price=content.price,
-                    paid=int(content.paid),
+                    paid=int(bool(content.paid)),
                     verified=True,
                     queue_id=queue_id,
                     created_at=content.__soft__.created_at,
@@ -327,7 +315,6 @@ class ContentManager:
                 return content
 
     async def find_paid_contents(self):
-        from sqlalchemy.ext.asyncio import async_object_session
 
         session = self.session
         assert session
@@ -463,14 +450,18 @@ class SiteAPI:
         self.database = schema.database
         self.schema = schema
         self.datascraper = datascraper
+        self.content_managers: dict[int, "weakref.ref[ContentManager]"] = {}
 
     async def __aenter__(self):
         self._session: AsyncSession = self.schema.sessionmaker()
         return self
 
     async def __aexit__(self, exc_type: None, exc_value: None, traceback: None):
+
         await self._session.commit()
         await self._session.aclose()
+        self.content_managers.clear()
+        gc.collect()
 
     def get_session(self):
         assert self._session, "Session has not been set"
@@ -481,6 +472,19 @@ class SiteAPI:
 
     def get_session_maker(self):
         return self.schema.sessionmaker()
+
+    def resolve_content_manager(self, user: UserModel):
+        content_manager = self.content_managers.get(user.id)
+        if content_manager:
+            content_manager = content_manager()
+        if not content_manager:
+            content_manager = user.content_manager
+            if not content_manager:
+                content_manager = ContentManager(user)
+                user.content_manager = content_manager
+            self.content_managers[user.id] = weakref.ref(content_manager)
+
+        return content_manager
 
     def get_user_query(
         self,
@@ -565,7 +569,7 @@ class SiteAPI:
         db_users = result.all()
         for db_user in db_users:
             if db_user and load_content:
-                await db_user.content_manager.init()
+                await self.resolve_content_manager(db_user).init(load_media=load_media)
         return db_users
 
     async def get_user(
@@ -598,7 +602,9 @@ class SiteAPI:
         result: ScalarResult[UserModel] = await session.scalars(stmt)
         db_user = result.first()
         if db_user and load_content:
-            await db_user.content_manager.init()
+
+            await self.resolve_content_manager(db_user).init(load_media=load_media)
+
         if not db_user and isinstance(identifier, str):
             stmt = select(UserAliasModel).where(UserAliasModel.username == identifier)
             db_alias = await session.scalar(stmt)
@@ -808,12 +814,12 @@ class SiteAPI:
         )
         if not existing_user:
             session.add(db_user)
-            await db_user.content_manager.init()
+            await self.resolve_content_manager(db_user).init()
         await session.commit()
 
         await db_user.awaitable_attrs.medias
 
-        db_user_info = await self.create_or_update_user_info(api_user, db_user)
+        await self.create_or_update_user_info(api_user, db_user)
         _alias = await db_user.add_alias(api_user.username)
         status = False
         if not existing_user:
@@ -888,22 +894,7 @@ class SiteAPI:
                                 db_user._mass_messages.append(db_mass_message)
                             pass
                 await self.create_or_update_paid_content(api_authed, db_user, [])
-            if performer_optimize:
-                api_subscriptions = await api_authed.get_subscriptions(filter_by="paid")
-            else:
-                api_subscriptions = await api_authed.get_subscriptions()
-            with alive_bar(len(api_subscriptions)) as bar:
-                for api_subscription in api_subscriptions:
-                    bar.title(
-                        f"Processing Subscription: {api_subscription.user.username} ({api_subscription.user.id})"
-                    )
-                    await self.create_or_update_subscription(
-                        api_subscription,
-                        db_user,
-                        performer_optimize=performer_optimize,
-                    )
-                    bar()
-                pass
+            await self.process_subscriptions(api_authed, db_user, performer_optimize)
         if isinstance(api_user, OFUserModel):
             status = True
             if performer_optimize and api_user.is_performer():
@@ -918,7 +909,6 @@ class SiteAPI:
                     spotify["username"] = spotify["displayName"]
                     await db_user.add_socials([spotify])
         await self.process_content(db_user, api_user)
-        db_user_info.size = await db_user.content_manager.size_sum()
         db_user.last_checked_at = datetime.now()
         await session.commit()
         return db_user
@@ -1044,11 +1034,34 @@ class SiteAPI:
         user_info.website = subscription_user.website
         return user_info
 
+    async def process_subscriptions(
+        self,
+        api_authed: ultima_scraper_api.auth_types,
+        db_user: UserModel,
+        performer_optimize: bool = False,
+    ):
+        if performer_optimize:
+            api_subscriptions = await api_authed.get_subscriptions(filter_by="paid")
+        else:
+            api_subscriptions = await api_authed.get_subscriptions()
+        with alive_bar(len(api_subscriptions)) as bar:
+            for api_subscription in api_subscriptions:
+                bar.title(
+                    f"Processing Subscription: {api_subscription.user.username} ({api_subscription.user.id})"
+                )
+                await self.create_or_update_subscription(
+                    api_subscription,
+                    db_user,
+                    performer_optimize=performer_optimize,
+                )
+                bar()
+
     async def process_content(
         self, db_user: UserModel, api_user: ultima_scraper_api.user_types
     ):
         if self.datascraper:
             content_manager = self.datascraper.resolve_content_manager(api_user)
+            db_content_manager = self.resolve_content_manager(db_user)
 
             async def process_content_async(
                 site_api: SiteAPI, db_user: UserModel, content: Any
@@ -1131,13 +1144,16 @@ class SiteAPI:
                 for content in contents.values():
                     db_content = content.__db_content__
                     await db_content.awaitable_attrs.media
+            size_sum = await db_content_manager.size_sum()
+            if size_sum > 0:
+                db_user.user_info.size = size_sum
 
     async def create_or_update_content(
         self, db_performer: UserModel, content: ContentMetadata
     ):
         api_performer = content.__soft__.get_author()
         receiver_id = content.receiver_id
-        content_manager = db_performer.content_manager
+        content_manager = db_performer.get_content_manager()
         found_db_content = await content_manager.find_content(
             content.content_id, content_type=content.api_type
         )
@@ -1178,7 +1194,7 @@ class SiteAPI:
         content_metadata = media.__content_metadata__
         if content_metadata:
             db_content = content_metadata.__db_content__
-        media_manager = db_user.content_manager.media_manager
+        media_manager = db_user.get_content_manager().media_manager
         found_media = media_manager.find_media(media.id)
         media_url = media.urls[0] if media.urls else None
         if not media_url:
@@ -1216,7 +1232,7 @@ class SiteAPI:
         self, db_user: UserModel, media: MediaMetadata
     ):
         assert media.id
-        db_media = db_user.content_manager.media_manager.find_media(media.id)
+        db_media = db_user.get_content_manager().media_manager.find_media(media.id)
         if not db_media:
             return
         db_content = None
@@ -1272,7 +1288,7 @@ class SiteAPI:
 
     async def create_or_update_paid_content(
         self,
-        api_authed: OnlyFansAuthModel,
+        api_authed: ultima_scraper_api.auth_types,
         db_user: UserModel,
         print_filter: list[str] = [],
     ):
