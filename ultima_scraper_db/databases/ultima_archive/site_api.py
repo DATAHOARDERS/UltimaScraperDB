@@ -93,8 +93,8 @@ def create_options(
                 joined_options.append(stmt)
     if media:
         stmt = selectinload(UserModel.medias).options(
-            joinedload(MediaModel.filepaths),
-            joinedload(MediaModel.content_media_assos),
+            selectinload(MediaModel.filepaths),
+            selectinload(MediaModel.content_media_assos),
         )
         joined_options.append(stmt)
     if user_info:

@@ -32,6 +32,7 @@ from ultima_scraper_api.apis.fansly.classes.extras import (
 from ultima_scraper_api.apis.onlyfans.classes.extras import (
     AuthDetails as OnlyFansAuthDetails,
 )
+
 from ultima_scraper_db.databases.ultima_archive import (
     CustomFuncs,
     DefaultContentTypes,
@@ -43,9 +44,10 @@ if TYPE_CHECKING:
     from ultima_scraper_collection.managers.metadata_manager.metadata_manager import (
         ContentMetadata,
     )
+
     from ultima_scraper_db.databases.ultima_archive.schemas.management import SiteModel
     from ultima_scraper_db.databases.ultima_archive.site_api import ContentManager
-content_managers: dict[int, "ContentManager"] = {}
+
 
 standard_unique_constraints = (
     UniqueConstraint(
@@ -69,7 +71,7 @@ standard_unique_constraints = (
 
 class UserModel(SiteTemplate):
     __tablename__ = "users"
-
+    __allow_unmapped__ = True
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
     username: Mapped[str] = mapped_column(Text, nullable=True)
     balance: Mapped[float] = mapped_column(Float, server_default="0")
@@ -134,19 +136,11 @@ class UserModel(SiteTemplate):
         foreign_keys="BoughtContentModel.supplier_id"
     )
     notifications: Mapped[list["NotificationModel"]] = relationship()
+    content_manager: "ContentManager | None" = None
 
-    @property
-    def content_manager(self):
-        from ultima_scraper_db.databases.ultima_archive.site_api import ContentManager
-
-        content_manager = content_managers.get(self.id)
-        if not content_manager:
-            content_manager = ContentManager(self)
-            content_managers[self.id] = content_manager
-        else:
-            content_manager.__user__ = self
-            content_manager.session = async_object_session(self)
-        return content_manager
+    def get_content_manager(self):
+        assert self.content_manager, "Content manager not set"
+        return self.content_manager
 
     def find_auths(self, active: bool | None = True):
         for auth in self.user_auths_info:
@@ -431,8 +425,8 @@ class UserInfoModel(SiteTemplate):
         Integer, server_default="0", default=0
     )
     size: Mapped[int] = mapped_column(BigInteger, server_default="0", default=0)
-    location: Mapped[str] = mapped_column(Text, nullable=True)
-    website: Mapped[str] = mapped_column(Text, nullable=True)
+    location: Mapped[str | None] = mapped_column(Text, nullable=True)
+    website: Mapped[str | None] = mapped_column(Text, nullable=True)
     downloaded_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, nullable=True)
     uploaded_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, nullable=True)
     user: Mapped["UserModel"] = relationship(back_populates="user_info")
