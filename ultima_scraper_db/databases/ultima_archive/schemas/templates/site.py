@@ -135,7 +135,9 @@ class UserModel(SiteTemplate):
     supplied_contents: Mapped[list["BoughtContentModel"]] = relationship(
         foreign_keys="BoughtContentModel.supplier_id"
     )
-    notifications: Mapped[list["NotificationModel"]] = relationship()
+    notifications: Mapped[list["NotificationModel"]] = relationship(
+        foreign_keys="NotificationModel.user_id"
+    )
     content_manager: "ContentManager | None" = None
 
     def get_content_manager(self):
@@ -888,9 +890,12 @@ class FavoriteUserModel(SiteTemplate):
 
 class NotificationModel(SiteTemplate):
     __tablename__ = "notifications"
-    __table_args__ = (UniqueConstraint("user_id", "category"),)
+    __table_args__ = (UniqueConstraint("user_id", "authed_user_id", "category"),)
     id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = mapped_column(
+    user_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("users.id"), nullable=True
+    )
+    authed_user_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("users.id"), nullable=True
     )
     category: Mapped[str] = mapped_column(String)
@@ -900,7 +905,10 @@ class NotificationModel(SiteTemplate):
         TIMESTAMPTZ, server_default=CustomFuncs.utcnow()
     )
 
-    user: Mapped["UserModel"] = selectin_relationship()
+    user: Mapped["UserModel"] = selectin_relationship(foreign_keys=user_id)
+    authed_user: Mapped["UserModel"] = selectin_relationship(
+        foreign_keys=authed_user_id
+    )
 
 
 class SocialModel(SiteTemplate):

@@ -29,11 +29,6 @@ from ultima_scraper_api.apis.onlyfans.classes.user_model import (
 )
 from ultima_scraper_api.helpers.main_helper import split_string
 from ultima_scraper_collection.helpers.main_helper import is_notif_valuable
-from ultima_scraper_collection.managers.metadata_manager.metadata_manager import (
-    ContentMetadata,
-    MediaMetadata,
-)
-
 from ultima_scraper_db.databases.ultima_archive.filters import AuthedInfoFilter
 from ultima_scraper_db.databases.ultima_archive.schemas.management import SiteModel
 from ultima_scraper_db.databases.ultima_archive.schemas.templates.site import (
@@ -63,6 +58,10 @@ from ultima_scraper_api import post_types
 
 if TYPE_CHECKING:
     from ultima_scraper_collection import datascraper_types
+    from ultima_scraper_collection.managers.metadata_manager.metadata_manager import (
+        ContentMetadata,
+        MediaMetadata,
+    )
 
 from sqlalchemy import inspect
 from sqlalchemy.orm.strategy_options import _AbstractLoad  # type: ignore
@@ -73,6 +72,7 @@ def create_options(
     user_info: bool = False,
     content: bool = False,
     media: bool = False,
+    notifications: bool = False,
 ):
     joined_options: list[_AbstractLoad] = []
     if alias:
@@ -100,12 +100,15 @@ def create_options(
     if user_info:
         stmt = selectinload(UserModel.user_info)
         joined_options.append(stmt)
+    if notifications:
+        stmt = selectinload(UserModel.notifications)
+        joined_options.append(stmt)
     return joined_options
 
 
 def fix_missing_paid_content(
     db_content: PostModel | MessageModel,
-    content: ContentMetadata,
+    content: "ContentMetadata",
     datascraper: "datascraper_types",
     api_performer: ultima_scraper_api.user_types,
 ):
@@ -250,7 +253,7 @@ class ContentManager:
             return result
         return self.stories + self.posts + self.messages + self.mass_messages
 
-    async def add_content(self, content: ContentMetadata):
+    async def add_content(self, content: "ContentMetadata"):
         match content.api_type:
             case "Stories":
                 content_model = StoryModel(
@@ -496,6 +499,7 @@ class SiteAPI:
         load_user_info: bool = False,
         load_content: bool = False,
         load_media: bool = False,
+        load_notifications: bool = False,
         limit: int | None = None,
         extra_options: Any = (),
     ):
@@ -504,6 +508,7 @@ class SiteAPI:
             media=load_media,
             user_info=load_user_info,
             alias=load_aliases,
+            notifications=load_notifications,
         )
         options += extra_options
         stmt_builder = (
@@ -582,6 +587,7 @@ class SiteAPI:
         load_user_info: bool = False,
         load_content: bool = False,
         load_media: bool = False,
+        load_notifications: bool = False,
         limit: int | None = None,
         extra_options: Any = (),
     ) -> UserModel | None:
@@ -594,6 +600,7 @@ class SiteAPI:
             load_user_info,
             load_content,
             load_media,
+            load_notifications,
             limit,
             extra_options,
         )
@@ -1073,7 +1080,7 @@ class SiteAPI:
                     print(_e)
 
             async def process_media_async(
-                site_api: SiteAPI, db_user: UserModel, media: MediaMetadata
+                site_api: SiteAPI, db_user: UserModel, media: "MediaMetadata"
             ):
                 try:
                     await site_api.create_or_update_media(db_user, media)
@@ -1082,7 +1089,7 @@ class SiteAPI:
                     print(_e)
 
             async def process_filepath_async(
-                site_api: SiteAPI, db_user: UserModel, media: MediaMetadata
+                site_api: SiteAPI, db_user: UserModel, media: "MediaMetadata"
             ):
                 try:
                     await site_api.create_or_update_filepaths(db_user, media)
@@ -1149,7 +1156,7 @@ class SiteAPI:
                 db_user.user_info.size = size_sum
 
     async def create_or_update_content(
-        self, db_performer: UserModel, content: ContentMetadata
+        self, db_performer: UserModel, content: "ContentMetadata"
     ):
         api_performer = content.__soft__.get_author()
         receiver_id = content.receiver_id
@@ -1188,7 +1195,7 @@ class SiteAPI:
             db_content.verified = True
         db_content.created_at = content.created_at
 
-    async def create_or_update_media(self, db_user: UserModel, media: MediaMetadata):
+    async def create_or_update_media(self, db_user: UserModel, media: "MediaMetadata"):
         assert media.id
         db_content = None
         content_metadata = media.__content_metadata__
@@ -1229,7 +1236,7 @@ class SiteAPI:
         return db_media
 
     async def create_or_update_filepaths(
-        self, db_user: UserModel, media: MediaMetadata
+        self, db_user: UserModel, media: "MediaMetadata"
     ):
         assert media.id
         db_media = db_user.get_content_manager().media_manager.find_media(media.id)
@@ -1255,7 +1262,7 @@ class SiteAPI:
             db_media.filepaths.append(db_filepath)
         return db_filepath
 
-    async def create_or_update_comment(self, content: ContentMetadata):
+    async def create_or_update_comment(self, content: "ContentMetadata"):
         session = self.get_session()
         if isinstance(content.__soft__, post_types):
             if len(content.__soft__.comments) > 1:
@@ -1319,20 +1326,41 @@ class SiteAPI:
                 unique_user_ids.add(supplier.id)
                 bar()
         await self.get_session().commit()
-        for user_id in unique_user_ids:
-            db_supplier = await self.get_user(user_id)
-            assert db_supplier
-            await db_supplier.awaitable_attrs.notifications
-            notification_exists = [
-                x for x in db_supplier.notifications if x.category == "paid_content"
-            ]
-            if not notification_exists:
-                notification = NotificationModel(
-                    user_id=db_supplier.id, category="paid_content"
-                )
-                db_supplier.notifications.append(notification)
-            else:
-                notification = notification_exists[0]
-                notification.sent_discord = False
-                notification.sent_telegram = False
+        for supplier_user_id in unique_user_ids:
+            await self.create_or_update_notification(
+                "paid_content", supplier_user_id, api_authed
+            )
         await self.get_session().commit()
+
+    async def create_or_update_notification(
+        self,
+        category: str,
+        supplier_user_id: int,
+        api_authed: ultima_scraper_api.auth_types,
+    ):
+
+        db_supplier = await self.get_user(supplier_user_id, load_notifications=True)
+        assert db_supplier
+        found_notification = None
+
+        for notification in db_supplier.notifications:
+            if notification.category == category:
+                if notification.authed_user_id == api_authed.id:
+                    found_notification = notification
+                    break
+                elif notification.authed_user_id is None and not found_notification:
+                    found_notification = notification
+
+        if not found_notification:
+            found_notification = NotificationModel(
+                user_id=db_supplier.id,
+                authed_user_id=api_authed.id,
+                category=category,
+            )
+            db_supplier.notifications.append(found_notification)
+        else:
+            if not found_notification.authed_user:
+                found_notification.sent_discord = False
+                found_notification.sent_telegram = False
+            found_notification.authed_user_id = api_authed.id
+        return found_notification
