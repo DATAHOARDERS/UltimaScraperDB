@@ -32,7 +32,6 @@ from ultima_scraper_api.apis.fansly.classes.extras import (
 from ultima_scraper_api.apis.onlyfans.classes.extras import (
     AuthDetails as OnlyFansAuthDetails,
 )
-
 from ultima_scraper_db.databases.ultima_archive import (
     CustomFuncs,
     DefaultContentTypes,
@@ -44,7 +43,6 @@ if TYPE_CHECKING:
     from ultima_scraper_collection.managers.metadata_manager.metadata_manager import (
         ContentMetadata,
     )
-
     from ultima_scraper_db.databases.ultima_archive.schemas.management import SiteModel
     from ultima_scraper_db.databases.ultima_archive.site_api import ContentManager
 
@@ -169,13 +167,31 @@ class UserModel(SiteTemplate):
         )
         return await session.scalar(stmt)
 
+    async def update_username(self, username: str):
+        u_username = f"u{self.id}"
+        final_aliases = [
+            x for x in self.aliases if x.id is not None and x.username != u_username
+        ]
+        if username == u_username:
+            if self.aliases:
+                aliases_sorted_by_id = [x for x in self.aliases if x.id is None]
+                aliases_sorted_by_id.extend(
+                    sorted(final_aliases, key=lambda x: x.id, reverse=True)
+                )
+                if not aliases_sorted_by_id:
+                    return
+                username = aliases_sorted_by_id[0].username
+        if self.username != username:
+            old_username = self.username
+            self.username = username
+            await self.add_alias(old_username)
+
     async def add_alias(self, username: str):
         if self.username != username:
-            alias = await self.find_aliases(self.username)
+            alias = await self.find_aliases(username)
             if not alias:
-                alias = UserAliasModel(username=self.username)
+                alias = UserAliasModel(username=username)
                 self.aliases.append(alias)
-            self.username = username
             return alias
 
     async def find_aliases(self, username: str):
@@ -519,6 +535,11 @@ class MediaModel(SiteTemplate):
     content_media_assos: Mapped[list[ContentMediaAssoModel]] = relationship(
         back_populates="media"
     )
+
+    async def get_contents(self):
+        await self.awaitable_attrs.content_media_assos
+        db_contents = [await x.get_content() for x in self.content_media_assos]
+        return db_contents
 
     async def find_content(self, api_type: str):
         content_type = api_type if api_type != "Stories" else "Story"

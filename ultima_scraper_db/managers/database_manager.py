@@ -249,6 +249,16 @@ class Database:
                 print(e)
                 breakpoint()
 
+    async def run_downgrade(self, version: str) -> None:
+        def downgrade(connection: Connection, cfg: Config):
+            cfg.attributes["connection"] = connection
+            command.downgrade(alembic_cfg, version)
+
+        async with self.engine.connect() as conn:
+            assert self.alembica
+            alembic_cfg = self.alembica.config
+            await conn.run_sync(downgrade, alembic_cfg)
+
 
 class DatabaseManager:
     def __init__(self) -> None:

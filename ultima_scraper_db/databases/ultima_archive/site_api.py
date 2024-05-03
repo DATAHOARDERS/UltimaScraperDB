@@ -674,8 +674,13 @@ class SiteAPI:
         found_contents = await self.get_session().scalars(stmt)
         return found_contents.all()
 
-    async def get_media(self, media_id: int):
-        stmt = select(MediaModel).where(MediaModel.id == media_id)
+    async def get_media(self, media_id: int | None = None, url: str | None = None):
+        found_media = None
+        stmt = select(MediaModel)
+        if media_id:
+            stmt = stmt.where(MediaModel.id == media_id)
+        if url:
+            stmt = stmt.where(MediaModel.url.contains(url))
         found_media = await self.get_session().scalar(stmt)
         if found_media:
             await found_media.awaitable_attrs.filepaths
