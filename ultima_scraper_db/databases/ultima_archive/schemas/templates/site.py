@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from inflection import singularize, underscore
+from pydantic import BaseModel
 from sqlalchemy import (
     BigInteger,
     Boolean,
@@ -25,13 +26,14 @@ from sqlalchemy import (
 )
 from sqlalchemy.ext.asyncio import async_object_session
 from sqlalchemy.ext.compiler import compiles  # type: ignore
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, backref, mapped_column, relationship
 from ultima_scraper_api.apis.fansly.classes.extras import (
     AuthDetails as FanslyAuthDetails,
 )
 from ultima_scraper_api.apis.onlyfans.classes.extras import (
     AuthDetails as OnlyFansAuthDetails,
 )
+
 from ultima_scraper_db.databases.ultima_archive import (
     CustomFuncs,
     DefaultContentTypes,
@@ -43,7 +45,11 @@ if TYPE_CHECKING:
     from ultima_scraper_collection.managers.metadata_manager.metadata_manager import (
         ContentMetadata,
     )
-    from ultima_scraper_db.databases.ultima_archive.schemas.management import SiteModel
+
+    from ultima_scraper_db.databases.ultima_archive.schemas.management import (
+        HostModel,
+        SiteModel,
+    )
     from ultima_scraper_db.databases.ultima_archive.site_api import ContentManager
 
 
@@ -136,6 +142,7 @@ class UserModel(SiteTemplate):
     notifications: Mapped[list["NotificationModel"]] = relationship(
         foreign_keys="NotificationModel.user_id"
     )
+    remote_url: Mapped["RemoteURLModel"] = relationship()
     content_manager: "ContentManager | None" = None
 
     def get_content_manager(self):
@@ -446,6 +453,7 @@ class UserInfoModel(SiteTemplate):
     location: Mapped[str | None] = mapped_column(Text, nullable=True)
     website: Mapped[str | None] = mapped_column(Text, nullable=True)
     downloaded_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, nullable=True)
+    first_downloaded_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, nullable=True)
     uploaded_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, nullable=True)
     user: Mapped["UserModel"] = relationship(back_populates="user_info")
 
@@ -483,7 +491,13 @@ class HistoUserInfoModel(SiteTemplate):
 
 class ContentMediaAssoModel(DefaultContentTypes, SiteTemplate):
     __tablename__ = "content_media_asso"
-    __table_args__ = standard_unique_constraints
+    __table_args__ = standard_unique_constraints + (
+        Index("ix_content_media_story_id", "story_id"),
+        Index("ix_content_media_post_id", "post_id"),
+        Index("ix_content_media_message_id", "message_id"),
+        Index("ix_content_media_mass_message_id", "mass_message_id"),
+        Index("ix_content_media_media_id", "media_id"),
+    )
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     media: Mapped["MediaModel"] = relationship(
         "MediaModel", back_populates="content_media_assos"
@@ -660,14 +674,11 @@ class PostModel(ContentTemplate):
     )
     comments: Mapped[list["CommentModel"]] = relationship()
 
-    media: Mapped[list["MediaModel"]] = relationship(
+    media = relationship(
         "MediaModel",
         secondary=ContentMediaAssoModel.__table__,
-        primaryjoin=and_(
-            ContentMediaAssoModel.post_id == id,
-        ),
-        secondaryjoin=ContentMediaAssoModel.media_id == MediaModel.id,
-        backref="posts",
+        backref=backref("posts", lazy="joined"),
+        lazy="joined",
     )
 
     # Relationship for posts linked by the current post
@@ -728,14 +739,11 @@ class MessageModel(ContentTemplate):
     user: Mapped["UserModel"] = relationship(
         foreign_keys=user_id,
     )
-    media: Mapped[list["MediaModel"]] = relationship(
+    media = relationship(
         "MediaModel",
         secondary=ContentMediaAssoModel.__table__,
-        primaryjoin=and_(
-            ContentMediaAssoModel.message_id == id,
-        ),
-        secondaryjoin=ContentMediaAssoModel.media_id == MediaModel.id,
-        backref="messages",
+        backref=backref("messages", lazy="joined"),
+        lazy="joined",
     )
 
     async def find_media(self, media_id: int):
@@ -886,7 +894,7 @@ class JobModel(SiteTemplate):
     server_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("management.servers.id")
     )
-    host_id: Mapped[int] = mapped_column(
+    host_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("management.hosts.id"), nullable=True
     )
     skippable: Mapped[bool] = mapped_column(Boolean, server_default="false")
@@ -895,7 +903,8 @@ class JobModel(SiteTemplate):
     active: Mapped[bool] = mapped_column(Boolean, server_default="true")
     completed_at: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ, nullable=True)
     user: Mapped[UserModel] = relationship(back_populates="jobs")
-    site: Mapped["SiteModel"] = relationship(foreign_keys=site_id)
+    site: Mapped["SiteModel"] = selectin_relationship(foreign_keys=site_id)
+    host: Mapped["HostModel"] = selectin_relationship(foreign_keys=host_id)
 
 
 class FavoriteUserModel(SiteTemplate):
@@ -926,10 +935,8 @@ class NotificationModel(SiteTemplate):
         TIMESTAMPTZ, server_default=CustomFuncs.utcnow()
     )
 
-    user: Mapped["UserModel"] = selectin_relationship(foreign_keys=user_id)
-    authed_user: Mapped["UserModel"] = selectin_relationship(
-        foreign_keys=authed_user_id
-    )
+    user: Mapped["UserModel"] = relationship(foreign_keys=user_id)
+    authed_user: Mapped["UserModel"] = relationship(foreign_keys=authed_user_id)
 
 
 class SocialModel(SiteTemplate):
@@ -957,10 +964,14 @@ class RemoteURLModel(SiteTemplate):
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"))
     host_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("management.hosts.id"))
+    root_id: Mapped[int | None] = mapped_column(
+        Text, nullable=True, server_default=None
+    )
     url: Mapped[str] = mapped_column(Text, nullable=True)
     exists: Mapped[bool] = mapped_column(Boolean, server_default="False")
     uploaded_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ)
     downloaded_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, nullable=True)
+    user: Mapped[UserModel] = relationship(back_populates="remote_url")
 
 
 class MediaDetectionModel(SiteTemplate):
@@ -1011,26 +1022,33 @@ class MediaDetectionModel(SiteTemplate):
     )
     media: Mapped["MediaModel"] = relationship()
 
-    class MediaDetectionFilter:
+    class MediaDetectionFilter(BaseModel):
         label: str
         score: float
 
-    def filter_stmt(self, filters: list[MediaDetectionFilter], sex: int | None):
+    def filter_stmt(
+        self,
+        filters: list[MediaDetectionFilter],
+        sex: int | None,
+        user_id: int | None = None,
+        category: str | None = None,
+    ):
         # Start with a base query
         base_query = (
             select(FilePathModel)
-            .join(
-                MediaDetectionModel,
-                FilePathModel.media_id == MediaDetectionModel.media_id,
-            )
-            .join(MediaModel)
-            .join(UserModel)
-            .join(UserInfoModel)
+            .join(FilePathModel.media)
+            .join(MediaModel.user)
+            .join(UserModel.user_info)
         )
+
+        # Add conditions for filtering by user_id and sex
+        if user_id is not None:
+            base_query = base_query.where(UserModel.id == user_id)
         if sex is not None:
             base_query = base_query.where(UserInfoModel.sex == sex)
-
-        # Dynamically construct the filter conditions
+        if category is not None:
+            base_query = base_query.where(MediaModel.category == category)
+        # Construct the filter conditions
         for media_filter in filters:
             subquery = (
                 exists()
@@ -1043,7 +1061,6 @@ class MediaDetectionModel(SiteTemplate):
                 )
                 .correlate(FilePathModel)
             )
-            # Apply the constructed condition to the base query
             base_query = base_query.where(subquery)
 
         # Order the query

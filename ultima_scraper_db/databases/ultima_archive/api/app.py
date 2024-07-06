@@ -1,9 +1,18 @@
 from fastapi import APIRouter
 
 routers: list[APIRouter] = []
-from ultima_scraper_db.databases.ultima_archive.api.routers.users import router
+router_names = [
+    "users",
+    "jobs",
+    "client",
+    "remote_urls",
+    "notifications",
+    "filepaths",
+    "media_detections",
+    "sites",
+]
 
-routers.append(router)
-from ultima_scraper_db.databases.ultima_archive.api.routers.jobs import router
-
-routers.append(router)
+for name in router_names:
+    module_path = f"ultima_scraper_db.databases.ultima_archive.api.routers.{name}"
+    router = getattr(__import__(module_path, fromlist=["router"]), "router")
+    routers.append(router)

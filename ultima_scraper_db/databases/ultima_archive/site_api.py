@@ -3,7 +3,7 @@ import gc
 import weakref
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Type
+from typing import TYPE_CHECKING, Any, Literal, Sequence, Type
 from urllib.parse import ParseResult
 
 import ultima_scraper_api
@@ -29,6 +29,7 @@ from ultima_scraper_api.apis.onlyfans.classes.user_model import (
 )
 from ultima_scraper_api.helpers.main_helper import split_string
 from ultima_scraper_collection.helpers.main_helper import is_notif_valuable
+
 from ultima_scraper_db.databases.ultima_archive.filters import AuthedInfoFilter
 from ultima_scraper_db.databases.ultima_archive.schemas.management import SiteModel
 from ultima_scraper_db.databases.ultima_archive.schemas.templates.site import (
@@ -44,6 +45,7 @@ from ultima_scraper_db.databases.ultima_archive.schemas.templates.site import (
     MessageModel,
     NotificationModel,
     PostModel,
+    RemoteURLModel,
     StoryModel,
     SubscriptionModel,
     UserAliasModel,
@@ -198,40 +200,50 @@ class ContentManager:
         self.media_manager = MediaManager(self)
 
     async def init(self, load_media: bool = False, media_ids: list[int] = []):
-        await self.__user__.awaitable_attrs._stories
-        await self.__user__.awaitable_attrs._posts
-        await self.__user__.awaitable_attrs._messages
-        await self.__user__.awaitable_attrs._mass_messages
+        awaitables = [
+            self.__user__.awaitable_attrs._stories,
+            self.__user__.awaitable_attrs._posts,
+            self.__user__.awaitable_attrs._messages,
+            self.__user__.awaitable_attrs._mass_messages,
+        ]
+        await asyncio.gather(*awaitables)
+
         if not self.session:
             self.session = async_object_session(self.__user__)
+
         media_manager = self.media_manager
         self.stories: list["StoryModel"] = self.__user__._stories  # type: ignore
-        [
-            media_manager.add_media(item)
-            for content in self.stories
-            for item in await content.awaitable_attrs.media
-        ]
+
+        stories_media = [content.awaitable_attrs.media for content in self.stories]
+        stories_media_items = await asyncio.gather(*stories_media)
+        for media_list in stories_media_items:
+            for item in media_list:
+                media_manager.add_media(item)
 
         self.posts: list["PostModel"] = self.__user__._posts  # type: ignore
         if self.posts:
-            pass
-        [
-            media_manager.add_media(item)
-            for content in self.posts
-            for item in await content.awaitable_attrs.media
-        ]
+            posts_media = [content.awaitable_attrs.media for content in self.posts]
+            posts_media_items = await asyncio.gather(*posts_media)
+            for media_list in posts_media_items:
+                for item in media_list:
+                    media_manager.add_media(item)
+
         self.messages: list["MessageModel"] = self.__user__._messages  # type: ignore
-        [
-            media_manager.add_media(item)
-            for content in self.messages
-            for item in await content.awaitable_attrs.media
-        ]
+        messages_media = [content.awaitable_attrs.media for content in self.messages]
+        messages_media_items = await asyncio.gather(*messages_media)
+        for media_list in messages_media_items:
+            for item in media_list:
+                media_manager.add_media(item)
+
         self.mass_messages: list["MassMessageModel"] = self.__user__._mass_messages  # type: ignore
-        [
-            media_manager.add_media(item)
-            for content in self.mass_messages
-            for item in await content.awaitable_attrs.media
+        mass_messages_media = [
+            content.awaitable_attrs.media for content in self.mass_messages
         ]
+        mass_messages_media_items = await asyncio.gather(*mass_messages_media)
+        for media_list in mass_messages_media_items:
+            for item in media_list:
+                media_manager.add_media(item)
+
         if load_media:
             await media_manager.init(media_ids=media_ids)
         return self
@@ -317,44 +329,57 @@ class ContentManager:
             if content.id == content_id:
                 return content
 
-    async def find_paid_contents(self):
-
+    async def find_paid_contents(
+        self, only_downloaded: bool = False
+    ) -> Sequence[MediaModel]:
         session = self.session
         assert session
+
+        # Adjust common conditions based on only_downloaded parameter
+        if only_downloaded:
+            common_conditions = and_(
+                MediaModel.filepaths.any(
+                    FilePathModel.downloaded == True
+                ),  # Assuming MediaFilePath is the model for filepaths
+                MediaModel.preview == False,
+            )
+        else:
+            common_conditions = and_(
+                MediaModel.filepaths.any(), MediaModel.preview == False
+            )
+
+        # PostModel conditions
+        post_conditions = and_(
+            PostModel.user_id == self.__user__.id,
+            PostModel.price > 0,
+            PostModel.paid == True,
+        )
+
+        # MessageModel conditions
+        message_conditions = and_(
+            MessageModel.user_id == self.__user__.id,
+            MessageModel.price > 0,
+            MessageModel.paid == True,
+        )
+
         stmt1 = (
             select(MediaModel)
             .join(PostModel.media)
-            .options(joinedload(MediaModel.filepaths))
-            .where(
-                and_(
-                    PostModel.user_id == self.__user__.id,
-                    PostModel.price > 0,
-                    PostModel.paid == True,
-                    exists(MediaModel).where(MediaModel.filepaths.any()),
-                    MediaModel.preview == False,
-                )
-            )
+            .options(selectinload(MediaModel.filepaths))
+            .where(post_conditions, common_conditions)
         )
+
         stmt2 = (
             select(MediaModel)
             .join(MessageModel.media)
-            .options(joinedload(MediaModel.filepaths))
-            .where(
-                and_(
-                    MessageModel.user_id == self.__user__.id,
-                    MessageModel.price > 0,
-                    MessageModel.paid == True,
-                    exists(MediaModel).where(MediaModel.filepaths.any()),
-                    MediaModel.preview == False,
-                )
-            )
+            .options(selectinload(MediaModel.filepaths))
+            .where(message_conditions, common_conditions)
         )
+
         union_stmt = union_all(stmt1, stmt2)
         orm_stmt = select(MediaModel).from_statement(union_stmt)
-        result_3 = await session.scalars(orm_stmt)
-        result_3 = result_3.unique().all()
-        pass
-        return result_3
+        result = await session.scalars(orm_stmt)
+        return result.unique().all()
 
     async def size_sum(self):
         session = self.session
@@ -466,9 +491,12 @@ class SiteAPI:
         self.content_managers.clear()
         gc.collect()
 
-    def get_session(self):
+    def resolve_session(self):
         assert self._session, "Session has not been set"
         return self._session
+
+    def get_session(self):
+        return self.resolve_session()
 
     def set_session(self, session: AsyncSession):
         self._session = session
@@ -700,15 +728,22 @@ class SiteAPI:
         found_media = await self.get_session().scalars(stmt)
         return found_media.unique().all()
 
-    async def get_filepaths(self, identifier: int | str):
+    async def get_filepaths(
+        self, identifier: int | str | None = None, media_id: int | None = None
+    ):
         stmt = select(FilePathModel)
-        if isinstance(identifier, int):
-            stmt = stmt.where(FilePathModel.id == identifier)
-        else:
-            stmt = stmt.where(FilePathModel.filepath.contains(identifier))
 
-        found_filepath = await self.get_session().scalars(stmt)
-        return found_filepath
+        if identifier is not None:
+            if isinstance(identifier, int):
+                stmt = stmt.where(FilePathModel.id == identifier)
+            else:
+                stmt = stmt.where(FilePathModel.filepath.contains(identifier))
+
+        if media_id is not None:
+            stmt = stmt.where(FilePathModel.media_id == media_id)
+
+        found_filepaths = await self.get_session().scalars(stmt)
+        return found_filepaths.all()
 
     async def get_mass_message(self, mass_message_id: int):
         stmt = select(MassMessageModel).where(MassMessageModel.id == mass_message_id)
@@ -721,9 +756,35 @@ class SiteAPI:
         assert found_site
         return found_site
 
+    async def get_notifications(
+        self,
+        platform: Literal["discord", "telegram"] | None = None,
+        sent: bool | None = None,
+        page: int = 1,
+        limit: int = 100,
+    ):
+        stmt = select(NotificationModel).options(
+            joinedload(NotificationModel.user).joinedload(UserModel.user_info),
+            joinedload(NotificationModel.user).joinedload(UserModel.aliases),
+        )
+        if platform and sent is not None:
+            if platform == "telegram":
+                stmt = stmt.where(NotificationModel.sent_telegram == sent)
+            else:
+                stmt = stmt.where(NotificationModel.sent_discord == sent)
+        # Calculate offset
+        offset = (page - 1) * limit
+
+        # Apply limit and offset for pagination
+        stmt = stmt.limit(limit).offset(offset)
+
+        found_notifications = await self.get_session().scalars(stmt)
+        return found_notifications.unique().all()
+
     async def get_jobs(
         self,
         server_id: int | None = None,
+        performer_id: int | None = None,
         user_id: int | None = None,
         category: str | None = None,
         priority: bool | None = None,
@@ -737,6 +798,8 @@ class SiteAPI:
         stmt = select(JobModel).filter_by(site_id=db_site.id)
         if server_id:
             stmt = stmt.filter_by(server_id=server_id)
+        if performer_id:
+            stmt = stmt.filter_by(user_id=performer_id)
         if user_id:
             stmt = stmt.filter_by(user_id=user_id)
         if category:
@@ -765,7 +828,9 @@ class SiteAPI:
         db_user: UserModel,
         category: str,
         server_id: int = 1,
+        host_id: int | None = None,
         priority: bool = False,
+        skippable: bool = False,
     ):
         session = self.get_session()
         db_jobs = await self.get_jobs(user_id=db_user.id, category=category)
@@ -778,6 +843,8 @@ class SiteAPI:
             db_job.category = category
             db_job.server_id = server_id
             db_job.priority = priority
+            db_job.host_id = host_id
+            db_job.skippable = skippable
             db_job.active = True
         else:
             db_job = JobModel(
@@ -786,11 +853,41 @@ class SiteAPI:
                 user_username=db_user.username,
                 category=category,
                 server_id=server_id,
+                host_id=host_id,
+                skippable=skippable,
                 priority=priority,
             )
             session.add(db_job)
         await session.commit()
         return db_job
+
+    async def get_remote_url(self, user_id: int):
+        stmt = select(RemoteURLModel).where(RemoteURLModel.user_id == user_id)
+        found_remote_url = await self.get_session().scalar(stmt)
+        return found_remote_url
+
+    async def create_or_update_remote_url(
+        self, user_id: int, host_id: int, url: str, uploaded_at: datetime
+    ):
+        session = self.get_session()
+        stmt = select(RemoteURLModel).where(RemoteURLModel.user_id == user_id)
+        found_remote_url = await session.scalar(stmt)
+        if not found_remote_url:
+            found_remote_url = RemoteURLModel(
+                user_id=user_id,
+                host_id=host_id,
+                url=url,
+                uploaded_at=uploaded_at,
+                exists=True,
+            )
+            session.add(found_remote_url)
+        else:
+            found_remote_url.host_id = host_id
+            found_remote_url.url = url
+            found_remote_url.uploaded_at = uploaded_at
+            found_remote_url.exists = True
+        await session.commit()
+        return found_remote_url
 
     async def update_user(
         self, api_user: ultima_scraper_api.user_types, found_db_user: UserModel | None
@@ -832,7 +929,7 @@ class SiteAPI:
         await db_user.awaitable_attrs.medias
 
         await self.create_or_update_user_info(api_user, db_user)
-        _alias = await db_user.add_alias(api_user.username)
+        await db_user.update_username(api_user.username)
         status = False
         if not existing_user:
             await db_user.awaitable_attrs.user_auths_info

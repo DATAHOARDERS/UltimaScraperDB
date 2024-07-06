@@ -17,7 +17,9 @@ TIMESTAMPTZ = sa.TIMESTAMP(timezone=True)
 
 
 def selectin_relationship(
-    *args: str, back_populates: str | None = None, **kwargs: Mapped[int] | Mapped[str]
+    *args: str,
+    back_populates: str | None = None,
+    **kwargs: Mapped[int] | Mapped[str] | Mapped[int | None],
 ):
     return relationship(*args, lazy="selectin", back_populates=back_populates, **kwargs)
 

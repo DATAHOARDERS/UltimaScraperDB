@@ -5,11 +5,16 @@ from ultima_scraper_db.databases.ultima_archive.filters import AuthedInfoFilter
 from ultima_scraper_db.databases.ultima_archive.site_api import SiteAPI
 from ultima_scraper_db.managers.database_manager import Database, DatabaseAPI_, Schema
 
+from ultima_scraper_db.databases.ultima_archive.management_api import ManagementAPI
+
 
 class ArchiveAPI(DatabaseAPI_):
     def __init__(self, database: Database) -> None:
         super().__init__(database)
 
+        self.management_api: ManagementAPI = ManagementAPI(
+            self.database.schemas["management"]
+        )
         self.management_schema: Schema = self.database.schemas["management"]
         self.site_apis: dict[str, SiteAPI] = {}
         for supported_site in SUPPORTED_SITES:
@@ -25,9 +30,11 @@ class ArchiveAPI(DatabaseAPI_):
         self.server_manager = await ServerManager(self).init(self.database)
         return self
 
+    def create_management_api(self):
+        return ManagementAPI(self.database.schemas["management"])
+
     def create_site_api(self, name: str):
-        site_api = SiteAPI(self.database.schemas[name.lower()])
-        return site_api
+        return SiteAPI(self.database.schemas[name.lower()])
 
     def get_site_api(self, name: str):
         site_api = self.find_site_api(name)
@@ -43,6 +50,11 @@ class ArchiveAPI(DatabaseAPI_):
 
     def find_site_api(self, name: str):
         return self.site_apis[name.lower()]
+
+    async def get_sites(self):
+        async with self.create_management_api() as management_api:
+            sites = await management_api.get_sites()
+            return sites
 
     async def update_authed_users(self):
         import ultima_scraper_api

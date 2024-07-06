@@ -1,28 +1,27 @@
 [tool.poetry]
 name = "ultima-scraper-db"
-version = "0.3.4"
+version = "0.3.7"
 description = ""
-authors = [
-    "UltimaHoarder <1285176+UltimaHoarder@users.noreply.github.com>",
-]
+authors = ["UltimaHoarder <1285176+UltimaHoarder@users.noreply.github.com>"]
 readme = "README.md"
 packages = [{ include = "ultima_scraper_db" }]
 include = ["ultima_scraper_db/py.typed"]
 
 [tool.poetry.dependencies]
-python = ">=3.10,<3.12"
-sqlalchemy = {extras = ["asyncio"], version = "^2.0.16"}
-asyncpg = "^0.27.0"
+python = ">=3.10,<4"
+sqlalchemy = { extras = ["asyncio"], version = "^2.0.16" }
+asyncpg = "^0.29.0"
 psycopg = "^3.1.9"
 ultima-scraper-api = "^2.0.0"
 ultima-scraper-collection = "^2.0.0"
 sqlalchemy-utils = "^0.41.1"
 alembic = "^1.11.1"
 sshtunnel = "^0.4.0"
-fastapi = "^0.104.1"
-uvicorn = {extras = ["standard"], version = "^0.24.0"}
+fastapi = ">=0.100.0,<1.0.0"
+uvicorn = { extras = ["standard"], version = "^0.24.0" }
 fastapi-pagination = "^0.12.6"
 inflection = "^0.5.1"
+slowapi = "^0.1.9"
 
 
 [build-system]

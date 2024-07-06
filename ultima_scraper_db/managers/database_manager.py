@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sshtunnel import SSHTunnelForwarder  # type: ignore
+
 from ultima_scraper_db.helpers import create_database, database_exists
 
 if TYPE_CHECKING:
@@ -118,6 +119,8 @@ class Database:
         engine = create_async_engine(
             connection_string,
             echo=echo,
+            pool_size=30,
+            max_overflow=20,
         )
         self.engine = engine
 
@@ -158,7 +161,8 @@ class Database:
                     "application_name": schema_string,
                     "schema_translate_map": {None: schema_string},
                 },
-                pool_size=20,
+                pool_size=30,
+                max_overflow=20,
             )
             async_session = AsyncSession(engine, expire_on_commit=False)
             schema_obj = Schema(schema_string, engine, async_session, self)
