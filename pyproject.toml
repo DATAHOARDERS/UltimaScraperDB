@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "ultima-scraper-db"
-version = "0.3.7"
+version = "0.3.71"
 description = ""
 authors = ["UltimaHoarder <1285176+UltimaHoarder@users.noreply.github.com>"]
 readme = "README.md"
@@ -22,6 +22,7 @@ uvicorn = { extras = ["standard"], version = "^0.24.0" }
 fastapi-pagination = "^0.12.6"
 inflection = "^0.5.1"
 slowapi = "^0.1.9"
+platformdirs = "^4.2.2"
 
 
 [build-system]
