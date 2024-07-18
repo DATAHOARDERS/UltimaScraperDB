@@ -619,6 +619,10 @@ class SiteAPI:
         limit: int | None = None,
         extra_options: Any = (),
     ) -> UserModel | None:
+        if identifier and isinstance(identifier, str) and identifier[0].lower() == "u":
+            temp_identifier = identifier[1:]
+            if temp_identifier.isdigit():
+                identifier = int(temp_identifier)
         stmt = self.get_user_query(
             identifier,
             description,

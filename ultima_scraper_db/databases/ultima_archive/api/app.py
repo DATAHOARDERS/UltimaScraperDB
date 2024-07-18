@@ -10,6 +10,7 @@ router_names = [
     "filepaths",
     "media_detections",
     "sites",
+    "hosts",
 ]
 
 for name in router_names:

@@ -6,8 +6,6 @@ from pydantic import BaseModel
 from sqlalchemy import (
     BigInteger,
     Boolean,
-    CheckConstraint,
-    Constraint,
     Float,
     ForeignKey,
     Index,
@@ -17,11 +15,8 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     and_,
-    any_,
-    distinct,
     exists,
     func,
-    or_,
     select,
 )
 from sqlalchemy.ext.asyncio import async_object_session
@@ -33,7 +28,6 @@ from ultima_scraper_api.apis.fansly.classes.extras import (
 from ultima_scraper_api.apis.onlyfans.classes.extras import (
     AuthDetails as OnlyFansAuthDetails,
 )
-
 from ultima_scraper_db.databases.ultima_archive import (
     CustomFuncs,
     DefaultContentTypes,
@@ -45,7 +39,6 @@ if TYPE_CHECKING:
     from ultima_scraper_collection.managers.metadata_manager.metadata_manager import (
         ContentMetadata,
     )
-
     from ultima_scraper_db.databases.ultima_archive.schemas.management import (
         HostModel,
         SiteModel,
@@ -175,6 +168,7 @@ class UserModel(SiteTemplate):
         return await session.scalar(stmt)
 
     async def update_username(self, username: str):
+        await self.awaitable_attrs.aliases
         u_username = f"u{self.id}"
         final_aliases = [
             x for x in self.aliases if x.id is not None and x.username != u_username

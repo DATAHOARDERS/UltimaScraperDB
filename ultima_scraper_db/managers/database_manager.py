@@ -17,7 +17,6 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sshtunnel import SSHTunnelForwarder  # type: ignore
-
 from ultima_scraper_db.helpers import create_database, database_exists
 
 if TYPE_CHECKING:

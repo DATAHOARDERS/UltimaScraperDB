@@ -1,10 +1,10 @@
 from typing import TYPE_CHECKING
 
-import requests
 from sqlalchemy import ScalarResult, Select, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ultima_scraper_db.databases.ultima_archive.schemas.management import (
+    HostModel,
     ServerModel,
     SiteModel,
 )
@@ -33,9 +33,12 @@ class ManagementAPI:
         await self._session.commit()
         await self._session.aclose()
 
-    def get_session(self):
+    def resolve_session(self):
         assert self._session, "Session has not been set"
         return self._session
+
+    def get_session(self):
+        return self.resolve_session()
 
     async def get_sites(self):
         stmt = select(SiteModel)
@@ -51,3 +54,23 @@ class ManagementAPI:
         )
         result = await self.get_session().scalar(stmt)
         return result
+
+    async def get_hosts(self, host_id: int | None = None, host_name: str | None = None):
+        stmt = select(HostModel)
+        if host_id:
+            stmt = stmt.where(HostModel.id == host_id)
+        if host_name:
+            stmt = stmt.where(HostModel.name == host_name)
+        result = await self.get_session().scalars(stmt)
+        return result.all()
+
+    async def create_or_update_host(self, db_host: HostModel):
+        stmt = (
+            select(HostModel)
+            .where(HostModel.name == db_host.name)
+            .where(HostModel.identifier == db_host.identifier)
+        )
+        result = await self.get_session().scalar(stmt)
+        if not result:
+            self.get_session().add(db_host)
+        return db_host

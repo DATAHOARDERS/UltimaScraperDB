@@ -1,13 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter
 from pydantic import BaseModel
-from sqlalchemy import or_, orm, select, update
-from sqlalchemy.orm import contains_eager, lazyload, sessionmaker
+from sqlalchemy import update
 
 from ultima_scraper_db.databases.ultima_archive.api.client import UAClient
-from ultima_scraper_db.databases.ultima_archive.schemas.templates.site import (
-    FilePathModel,
-    JobModel,
-)
+from ultima_scraper_db.databases.ultima_archive.schemas.templates.site import JobModel
 
 restricted = (
     # lazyload(UserModel.user_auth_info),
@@ -28,8 +24,11 @@ router = APIRouter(
 
 class JobData(BaseModel):
     server_id: int | None = None
+    performer_id: int | None = None
     username: str | None = None
     category: str | None = None
+    host_id: int | None = None
+    skippable: bool = False
     active: bool | None = None
 
 
@@ -51,12 +50,17 @@ async def get_jobs(
     async with site_api as site_api:
         # limit = 100 if limit > 100 else limit
         jobs = await site_api.get_jobs(
-            category=job_type.category, page=page, limit=limit, active=job_type.active
+            server_id=job_type.server_id,
+            performer_id=job_type.performer_id,
+            category=job_type.category,
+            page=page,
+            limit=limit,
+            active=job_type.active,
         )
     return jobs
 
 
-@router.post("/create")
+@router.post("/{site_name}/create")
 async def create_job(
     job_type: JobData,
     site_name: str,
@@ -65,18 +69,26 @@ async def create_job(
 
     site_api = database_api.get_site_api(site_name)
     async with site_api as site_api:
-        user = await site_api.get_user(job_type.username)
+        user = await site_api.get_user(job_type.performer_id)
         if user:
+            assert job_type.server_id
             assert job_type.category
             _job = await site_api.create_or_update_job(
-                user, job_type.category, server_id=2
+                user,
+                job_type.category,
+                server_id=job_type.server_id,
+                host_id=job_type.host_id,
+                skippable=job_type.skippable,
             )
             await user.awaitable_attrs.subscribers
             return user
 
 
-@router.post("/update")
-async def update_job(
+from datetime import datetime
+
+
+@router.post("/complete")
+async def complete_job(
     job_type: UpdateJob,
     site_name: str,
 ):
@@ -87,40 +99,13 @@ async def update_job(
         stmt = (
             update(JobModel)
             .where(JobModel.id == job_type.id)
-            .values(active=job_type.active)
+            .values(active=job_type.active, completed_at=datetime.now())
         )
         await site_api.get_session().execute(stmt)
         return True
 
 
 from fastapi import Query
-
-
-class MediaDetectionFilter(BaseModel):
-    label: str
-    score: float
-
-
-@router.post("/media")
-async def get_detected_media(
-    filters: list[MediaDetectionFilter],
-    site_name: str,
-    page: int = Query(1, alias="page", gt=0),
-    limit: int = Query(10, alias="limit", gt=0),
-    sex: int | None = None,
-):
-    from ultima_scraper_db.databases.ultima_archive.schemas.templates.site import (
-        MediaDetectionModel,
-    )
-
-    database_api = UAClient.database_api
-    site_api = database_api.get_site_api(site_name)
-    stmt = MediaDetectionModel().filter_stmt(filters, sex)
-    offset = (page - 1) * limit
-    temp = await site_api.get_session().scalars(stmt.offset(offset).limit(limit))
-    media_detections = temp.all()
-    # [await x.awaitable_attrs.media for x in media_detections]
-    return [x.filepath for x in media_detections]
 
 
 @router.post("/test")
@@ -131,51 +116,99 @@ async def test(site_name: str, filepath_str: str = Query(alias="filepath")):
     from ultima_scraper_collection.managers.filesystem_manager import FilesystemManager
 
     database_api = UAClient.database_api
-    site_db_api = database_api.get_site_api(site_name)
+
     config = UAClient.config
     site_config: site_config_types = config.get_site_config(site_name=site_name)
     fsm = FilesystemManager()
     fsm.activate_directory_manager(site_config)
     filepath = Path(filepath_str).as_posix()
-    db_filepaths = await site_db_api.get_filepaths(Path(filepath).name)
-    performer_identifiers: list[int | str] = []
+    if not Path(filepath).exists():
+        download_directories = site_config.download_setup.directories
+        edited_filepath = filepath.split(site_name)[1]
+        for directory in download_directories:
+            if directory.path:
+                temp_path = Path(
+                    directory.path, site_name, edited_filepath.removeprefix("/")
+                )
+                if temp_path.exists():
+                    filepath = temp_path
+                    return filepath
 
-    for db_filepath in db_filepaths:
-        db_content = await db_filepath.get_content()
-        await db_content.awaitable_attrs.user
-        db_user = db_content.user
-        performer_identifiers.extend([db_user.id, db_user.username])
+    site_db_api = database_api.get_site_api(site_name)
 
-    found_path = None
+    async with site_db_api as site_db_api:
+        db_filepaths = await site_db_api.get_filepaths(Path(filepath).name)
+        performer_identifiers: list[int | str] = []
 
-    for performer_identity in performer_identifiers:
-        appearances = filepath.count(str(performer_identity))
-        if appearances == 1:
-            last_position = filepath.rfind(str(performer_identity))
-            part1 = Path(filepath[:last_position])
-            part2 = Path(filepath[last_position:])
+        for db_filepath in db_filepaths:
+            db_content = await db_filepath.get_content()
+            await db_content.awaitable_attrs.user
+            db_user = db_content.user
+            await db_user.awaitable_attrs.aliases
+            performer_identifiers.extend([db_user.id, db_user.username])
 
-            for directory in site_config.download_setup.directories:
-                if directory.path:
-                    temp_unique_path = Path(directory.path, part2)
+        found_path = None
 
-                    if not temp_unique_path.exists():
-                        reversed_parts = []
-                        for part in reversed(part1.parts):
-                            reversed_parts = [part] + reversed_parts
-                            temp_unique_path = Path(
-                                directory.path, Path(*reversed_parts), part2
-                            )
+        for performer_identity in performer_identifiers:
+            appearances = filepath.count(str(performer_identity))
+            if appearances == 1:
+                last_position = filepath.rfind(str(performer_identity))
+                part1 = Path(filepath[:last_position])
+                part2 = Path(filepath[last_position:])
 
-                            if temp_unique_path.exists():
-                                found_path = temp_unique_path
-                                break
+                for directory in site_config.download_setup.directories:
+                    if directory.path:
+                        temp_unique_path = Path(directory.path, part2)
 
-            if found_path:
-                break
+                        if not temp_unique_path.exists():
+                            reversed_parts = []
+                            for part in reversed(part1.parts):
+                                reversed_parts = [part] + reversed_parts
+                                temp_unique_path = Path(
+                                    directory.path, Path(*reversed_parts), part2
+                                )
+
+                                if temp_unique_path.exists():
+                                    found_path = temp_unique_path
+                                    break
+
+                if found_path:
+                    break
+            else:
+                if appearances > 1:
+                    breakpoint()
+
+        if found_path:
+            return found_path
         else:
-            if appearances > 1:
-                breakpoint()
+            performer_usernames = [
+                db_user.username,
+                *[x.username for x in db_user.aliases],
+            ]
+            found_username = None
+            for performer_username in performer_usernames:
+                appearances = filepath.count(performer_username)
+                if appearances == 1:
+                    found_username = performer_username
 
-    if found_path:
-        return found_path
+            if found_username:
+                edited_filepath = filepath.split(site_name)[1]
+                performer_usernames.remove(found_username)
+                for directory in site_config.download_setup.directories:
+                    for performer_username in performer_usernames:
+                        edited_filepath_2 = edited_filepath.replace(
+                            found_username[0].capitalize(),
+                            performer_username[0].capitalize(),
+                        )
+                        edited_filepath_2 = edited_filepath_2.replace(
+                            found_username, performer_username
+                        )
+                        temp_path = Path(
+                            directory.path,
+                            site_name,
+                            edited_filepath_2.removeprefix("/"),
+                        )
+                        if temp_path.exists():
+                            filepath = temp_path
+                            return filepath
+    return
