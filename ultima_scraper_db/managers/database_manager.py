@@ -1,7 +1,9 @@
 import itertools
+import random
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import paramiko
 import uvicorn
 from alembic import command
 from alembic.config import Config
@@ -17,6 +19,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sshtunnel import SSHTunnelForwarder  # type: ignore
+
 from ultima_scraper_db.helpers import create_database, database_exists
 
 if TYPE_CHECKING:
@@ -92,7 +95,7 @@ class Database:
         port: int,
         username: str,
         password: str,
-        ssh: SSHTunnelForwarder | None,
+        ssh: SSHTunnelForwarder | dict[str, Any] | None,
         metadata: MetaData | None = None,
         alembica: Alembica | None = None,
     ) -> None:
@@ -101,6 +104,8 @@ class Database:
         self.port = port
         self.username = username
         self.password = password
+        if isinstance(ssh, dict):
+            ssh = self.handle_ssh(ssh, host, port)
         if ssh:
             ssh.start()
         self.ssh: SSHTunnelForwarder | None = ssh
@@ -108,6 +113,32 @@ class Database:
         self.metadata = metadata
         self.alembica = alembica
         self._echo = True
+
+    def handle_ssh(
+        self, ssh_auth_info: dict[str, Any], local_host: str, local_port: int
+    ):
+        if ssh_auth_info["host"]:
+            private_key_filepath = ssh_auth_info["private_key_filepath"]
+            ssh_private_key_password = ssh_auth_info["private_key_password"]
+            private_key = (
+                paramiko.RSAKey.from_private_key_file(
+                    private_key_filepath, ssh_private_key_password
+                ).key
+                if private_key_filepath
+                else None
+            )
+            random_port = random.randint(6000, 6999)
+            ssh_obj = SSHTunnelForwarder(
+                (ssh_auth_info["host"], ssh_auth_info["port"]),
+                ssh_username=ssh_auth_info["username"],
+                ssh_pkey=private_key,
+                ssh_private_key_password=ssh_private_key_password,
+                remote_bind_address=(local_host, local_port),
+                local_bind_address=(local_host, random_port),
+            )
+            return ssh_obj
+        else:
+            return None
 
     async def init_db(self, echo: bool = False):
         self._echo = echo
@@ -274,7 +305,7 @@ class DatabaseManager:
         port: int,
         username: str,
         password: str,
-        ssh: SSHTunnelForwarder,
+        ssh: SSHTunnelForwarder | dict[str, Any],
         metadata: MetaData | None = None,
         alembica: Alembica | None = None,
     ):
