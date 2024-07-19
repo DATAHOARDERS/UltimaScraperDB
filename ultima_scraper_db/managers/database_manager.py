@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import (
 )
 from sshtunnel import SSHTunnelForwarder  # type: ignore
 
+from ultima_scraper_db.databases.rest_api import RestAPI
 from ultima_scraper_db.helpers import create_database, database_exists
 
 if TYPE_CHECKING:
@@ -335,7 +336,7 @@ class DatabaseAPI_:
     def __init__(self, database: Database) -> None:
         self.database = database
 
-    def activate_api(self, fast_api: "UAClient", port: int):
+    def activate_api(self, fast_api: "RestAPI", port: int):
         from multiprocessing import Process
 
         origins = [

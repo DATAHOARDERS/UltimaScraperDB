@@ -17,7 +17,7 @@ async def run(config: UltimaScraperCollectionConfig):
         metadata=merged_metadata
     )
     await database.init_db()
-    ultima_archive_db_api = await ArchiveAPI(database).init()
+    ultima_archive_db_api = ArchiveAPI(database)
     fast_api = UAClient(ultima_archive_db_api)
     ultima_archive_db_api.activate_api(fast_api, 2140)
     ultima_archive_db_api.server.join()
