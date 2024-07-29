@@ -2,26 +2,21 @@ from ultima_scraper_api import SUPPORTED_SITES
 
 from ultima_scraper_db.databases.ultima_archive.api.client import UAClient
 from ultima_scraper_db.databases.ultima_archive.filters import AuthedInfoFilter
+from ultima_scraper_db.databases.ultima_archive.management_api import ManagementAPI
 from ultima_scraper_db.databases.ultima_archive.site_api import SiteAPI
 from ultima_scraper_db.managers.database_manager import Database, DatabaseAPI_, Schema
-
-from ultima_scraper_db.databases.ultima_archive.management_api import ManagementAPI
 
 
 class ArchiveAPI(DatabaseAPI_):
     def __init__(self, database: Database) -> None:
         super().__init__(database)
 
-        self.management_api: ManagementAPI = ManagementAPI(
-            self.database.schemas["management"]
-        )
+        self.management_api: ManagementAPI = self.create_management_api()
         self.management_schema: Schema = self.database.schemas["management"]
         self.site_apis: dict[str, SiteAPI] = {}
         for supported_site in SUPPORTED_SITES:
             supported_site = supported_site.lower()
-            self.site_apis[supported_site] = SiteAPI(
-                self.database.schemas[supported_site]
-            )
+            self.site_apis[supported_site] = self.create_site_api(supported_site)
         self.fast_api = UAClient(database_api=self)
 
     async def init(self):
@@ -37,16 +32,7 @@ class ArchiveAPI(DatabaseAPI_):
         return SiteAPI(self.database.schemas[name.lower()])
 
     def get_site_api(self, name: str):
-        site_api = self.find_site_api(name)
-        new_site_api = SiteAPI(
-            Schema(
-                site_api.schema.name,
-                site_api.schema.engine,
-                site_api.schema.sessionmaker(),
-                site_api.schema.database,
-            )
-        )
-        return new_site_api
+        return self.site_apis[name.lower()]
 
     def find_site_api(self, name: str):
         return self.site_apis[name.lower()]

@@ -77,7 +77,7 @@ class UserModel(SiteTemplate):
     favorite: Mapped[bool] = mapped_column(Boolean, server_default="false")
     active: Mapped[bool] = mapped_column(Boolean, server_default="true")
     downloaded_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, nullable=True)
-    last_checked_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, nullable=True)
+    last_checked_at: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ, nullable=True)
     join_date: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMPTZ, server_default=CustomFuncs.utcnow()
@@ -374,7 +374,7 @@ class UserAuthModel(SiteTemplate):
     user: Mapped[UserModel] = selectin_relationship(back_populates="user_auths_info")
 
     def convert_to_auth_details(self, site_name: SITE_LITERALS):
-        if site_name == "OnlyFans":
+        if site_name.lower() == "OnlyFans".lower():
             return OnlyFansAuthDetails(
                 id=self.id,
                 username=self.user.username,
@@ -820,7 +820,7 @@ class SubscriptionModel(SiteTemplate):
     subscriber_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"))
     paid_content: Mapped[bool] = mapped_column(Boolean, server_default="0")
     active: Mapped[bool] = mapped_column(Boolean, server_default="true")
-    downloaded_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, nullable=True)
+    downloaded_at: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ, nullable=True)
     expires_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ)
     renewed_at: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ, nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ)

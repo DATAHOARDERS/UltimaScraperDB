@@ -29,6 +29,10 @@ from ultima_scraper_api.apis.onlyfans.classes.user_model import (
 )
 from ultima_scraper_api.helpers.main_helper import split_string
 from ultima_scraper_collection.helpers.main_helper import is_notif_valuable
+from ultima_scraper_collection.managers.aio_pika_wrapper import (
+    AioPikaWrapper,
+    create_notification,
+)
 
 from ultima_scraper_db.databases.ultima_archive.filters import AuthedInfoFilter
 from ultima_scraper_db.databases.ultima_archive.schemas.management import SiteModel
@@ -479,6 +483,7 @@ class SiteAPI:
         self.schema = schema
         self.datascraper = datascraper
         self.content_managers: dict[int, "weakref.ref[ContentManager]"] = {}
+        self.aio_pika_wrapper: AioPikaWrapper | None = None
 
     async def __aenter__(self):
         self._session: AsyncSession = self.schema.sessionmaker()
@@ -897,8 +902,9 @@ class SiteAPI:
         self, api_user: ultima_scraper_api.user_types, found_db_user: UserModel | None
     ):
         assert self.datascraper
-        content_manager = self.datascraper.resolve_content_manager(api_user)
         assert found_db_user
+
+        content_manager = self.datascraper.resolve_content_manager(api_user)
         for media in content_manager.media_manager.medias.values():
             _db_media = await self.create_or_update_media(found_db_user, media)
             _db_filepath = await self.create_or_update_filepaths(found_db_user, media)
@@ -929,9 +935,7 @@ class SiteAPI:
             session.add(db_user)
             await self.resolve_content_manager(db_user).init()
         await session.commit()
-
         await db_user.awaitable_attrs.medias
-
         await self.create_or_update_user_info(api_user, db_user)
         await db_user.update_username(api_user.username)
         status = False
@@ -952,15 +956,24 @@ class SiteAPI:
             status = True
 
         if status:
-            await db_user.awaitable_attrs.notifications
-            notification_exists = [
-                x for x in db_user.notifications if x.category == "new_performer"
-            ]
-            if not notification_exists:
-                notification = NotificationModel(
-                    user_id=api_user.id, category="new_performer"
-                )
-                db_user.notifications.append(notification)
+            if db_user.last_checked_at == None:
+                if self.aio_pika_wrapper:
+                    message = create_notification(
+                        "new_performer", api_user.get_api().site_name, db_user
+                    )
+                    await self.aio_pika_wrapper.publish_notification(message)
+                else:
+                    await db_user.awaitable_attrs.notifications
+                    notification_exists = [
+                        x
+                        for x in db_user.notifications
+                        if x.category == "new_performer"
+                    ]
+                    if not notification_exists:
+                        notification = NotificationModel(
+                            user_id=api_user.id, category="new_performer"
+                        )
+                        db_user.notifications.append(notification)
         if api_user.is_authed_user():
             api_authed = api_user.get_authed()
             db_auth_info = await self.create_or_update_auth_info(api_authed, db_user)
@@ -1173,6 +1186,7 @@ class SiteAPI:
         self, db_user: UserModel, api_user: ultima_scraper_api.user_types
     ):
         if self.datascraper:
+            session = self.get_session()
             content_manager = self.datascraper.resolve_content_manager(api_user)
             db_content_manager = self.resolve_content_manager(db_user)
 
@@ -1219,7 +1233,6 @@ class SiteAPI:
                         isinstance(db_content, MassMessageModel)
                         and content.api_type == "Messages"
                     ):
-                        session = self.get_session()
                         stmt = delete(FilePathModel).where(
                             FilePathModel.mass_message_id == db_content.id
                         )
@@ -1260,6 +1273,7 @@ class SiteAPI:
             size_sum = await db_content_manager.size_sum()
             if size_sum > 0:
                 db_user.user_info.size = size_sum
+            await session.commit()
 
     async def create_or_update_content(
         self, db_performer: UserModel, content: "ContentMetadata"
@@ -1433,9 +1447,17 @@ class SiteAPI:
                 bar()
         await self.get_session().commit()
         for supplier_user_id in unique_user_ids:
-            await self.create_or_update_notification(
-                "paid_content", supplier_user_id, api_authed
-            )
+            if self.aio_pika_wrapper:
+                supplier_user = await self.get_user(supplier_user_id)
+
+                message = create_notification(
+                    "paid_content", api_authed.get_api().site_name, supplier_user
+                )
+                await self.aio_pika_wrapper.publish_notification(message)
+            else:
+                await self.create_or_update_notification(
+                    "paid_content", supplier_user_id, api_authed
+                )
         await self.get_session().commit()
 
     async def create_or_update_notification(

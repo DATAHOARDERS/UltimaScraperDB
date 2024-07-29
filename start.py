@@ -9,7 +9,6 @@ from ultima_scraper_db.managers.database_manager import Alembica, DatabaseManage
 
 
 async def run(config: UltimaScraperCollectionConfig):
-
     db_manager = DatabaseManager()
     database = db_manager.create_database(
         **config.settings.databases[0].connection_info.model_dump(),

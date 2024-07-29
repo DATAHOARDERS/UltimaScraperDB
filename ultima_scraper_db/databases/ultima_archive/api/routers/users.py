@@ -48,8 +48,7 @@ async def get_users(
 ):
     database_api = UAClient.database_api
 
-    site_api = database_api.get_site_api(site_name)
-    async with site_api as site_api:
+    async with database_api.create_site_api(site_name) as site_api:
         # limit = 100 if limit > 100 else limit
         offset = max(0, (page - 1) * limit)
         stmt = (
@@ -82,8 +81,7 @@ async def get_users(
 async def read(site_name: str, identifier: int | str):
     database_api = UAClient.database_api
 
-    site_db_api = database_api.get_site_api(site_name)
-    async with site_db_api as site_db_api:
+    async with database_api.create_site_api(site_name) as site_db_api:
         user = await site_db_api.get_user(identifier, extra_options=restricted)
         if user:
             await user.awaitable_attrs.aliases
@@ -94,8 +92,9 @@ async def read(site_name: str, identifier: int | str):
             if authed:
                 site_user = await authed.get_user(identifier)
                 if site_user:
+                    db_user = await site_db_api.get_user(identifier)
                     user = await site_db_api.create_or_update_user(
-                        site_user, None, performer_optimize=True
+                        site_user, db_user, performer_optimize=True
                     )
                     user.content_manager = None
                     await user.awaitable_attrs.aliases
@@ -118,8 +117,7 @@ async def read_advanced(
 ):
     database_api = UAClient.database_api
 
-    site_api = database_api.get_site_api(site_name)
-    async with site_api as site_api:
+    async with database_api.create_site_api(site_name) as site_api:
         user = await site_api.get_user(identifier, extra_options=restricted)
         if user:
             if options:
@@ -143,7 +141,7 @@ async def check_user(site_name: str, identifier: int | str):
         database_api.server_manager, UltimaScraperCollectionConfig()
     )
     has_active_subscription = False
-    async with database_api.get_site_api(site_name) as db_site_api:
+    async with database_api.create_site_api(site_name) as db_site_api:
         user = await db_site_api.get_user(identifier)
         if user:
             datascraper = datascraper_manager.find_datascraper(site_name)
@@ -176,7 +174,7 @@ async def check_paid_content(
 ):
     database_api = UAClient.database_api
     paid_content: Sequence[MediaModel] = []
-    async with database_api.get_site_api(site_name) as db_site_api:
+    async with database_api.create_site_api(site_name) as db_site_api:
         db_user = await db_site_api.get_user(identifier)
         if db_user:
             db_buyers = await db_user.find_buyers(
