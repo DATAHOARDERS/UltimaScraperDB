@@ -21,3 +21,13 @@ async def get_filepath(request: Request, site_name: str, media_id: int):
     async with database_api.create_site_api(site_name) as site_api:
         filepaths = await site_api.get_filepaths(media_id=media_id)
         return filepaths
+
+
+@router.get("/{site_name}/{content_type}/{content_id}")
+async def get_filepath_by_content_id(
+    request: Request, site_name: str, content_type: str, content_id: int
+):
+    database_api = UAClient.database_api
+    async with database_api.create_site_api(site_name) as site_api:
+        filepaths = await site_api.get_filepaths(post_id=content_id)
+        return filepaths

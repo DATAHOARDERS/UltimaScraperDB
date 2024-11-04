@@ -135,7 +135,7 @@ class UserModel(SiteTemplate):
     notifications: Mapped[list["NotificationModel"]] = relationship(
         foreign_keys="NotificationModel.user_id"
     )
-    remote_url: Mapped["RemoteURLModel"] = relationship()
+    remote_urls: Mapped[list["RemoteURLModel"]] = relationship()
     content_manager: "ContentManager | None" = None
 
     def get_content_manager(self):
@@ -194,6 +194,13 @@ class UserModel(SiteTemplate):
                 alias = UserAliasModel(username=username)
                 self.aliases.append(alias)
             return alias
+
+    async def find_username(self, username: str):
+        if self.username == username:
+            return self
+        alias = await self.find_aliases(username)
+        if alias:
+            return self
 
     async def find_aliases(self, username: str):
         await self.awaitable_attrs.aliases
@@ -549,7 +556,7 @@ class MediaModel(SiteTemplate):
         db_contents = [await x.get_content() for x in self.content_media_assos]
         return db_contents
 
-    async def find_content(self, api_type: str):
+    async def find_content(self, api_type: str, content_id: int):
         content_type = api_type if api_type != "Stories" else "Story"
         await self.awaitable_attrs.content_media_assos
         for content_media_asso in self.content_media_assos:
@@ -557,6 +564,8 @@ class MediaModel(SiteTemplate):
                 key = content_media_asso.get_key(content_type)
                 assert key
                 value = getattr(content_media_asso, key)
+                if value and value != content_id:
+                    continue
                 if value:
                     return await content_media_asso.get_content()
             except Exception as _e:
@@ -962,10 +971,11 @@ class RemoteURLModel(SiteTemplate):
         Text, nullable=True, server_default=None
     )
     url: Mapped[str] = mapped_column(Text, nullable=True)
+    part: Mapped[int] = mapped_column(Integer, server_default="0")
     exists: Mapped[bool] = mapped_column(Boolean, server_default="False")
     uploaded_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ)
     downloaded_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, nullable=True)
-    user: Mapped[UserModel] = relationship(back_populates="remote_url")
+    user: Mapped[UserModel] = relationship(back_populates="remote_urls")
 
 
 class MediaDetectionModel(SiteTemplate):
