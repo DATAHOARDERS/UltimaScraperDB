@@ -29,8 +29,7 @@ async def get_detected_media(
 ):
 
     database_api = UAClient.database_api
-    site_api = database_api.get_site_api(site_name)
-    async with site_api as site_api:
+    async with database_api.create_site_api(site_name) as site_api:
         stmt = MediaDetectionModel().filter_stmt(
             filters, sex, user_id=user_id, category=category
         )

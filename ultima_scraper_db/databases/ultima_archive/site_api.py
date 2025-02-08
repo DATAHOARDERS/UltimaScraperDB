@@ -33,7 +33,6 @@ from ultima_scraper_collection.managers.aio_pika_wrapper import (
     AioPikaWrapper,
     create_notification,
 )
-
 from ultima_scraper_db.databases.ultima_archive.filters import AuthedInfoFilter
 from ultima_scraper_db.databases.ultima_archive.schemas.management import SiteModel
 from ultima_scraper_db.databases.ultima_archive.schemas.templates.site import (
@@ -79,6 +78,7 @@ def create_options(
     content: bool = False,
     media: bool = False,
     notifications: bool = False,
+    remote_urls: bool = False,
 ):
     joined_options: list[_AbstractLoad] = []
     if alias:
@@ -108,6 +108,9 @@ def create_options(
         joined_options.append(stmt)
     if notifications:
         stmt = selectinload(UserModel.notifications)
+        joined_options.append(stmt)
+    if remote_urls:
+        stmt = selectinload(UserModel.remote_urls)
         joined_options.append(stmt)
     return joined_options
 
@@ -217,38 +220,36 @@ class ContentManager:
 
         media_manager = self.media_manager
         self.stories: list["StoryModel"] = self.__user__._stories  # type: ignore
-
         stories_media = [content.awaitable_attrs.media for content in self.stories]
-        stories_media_items = await asyncio.gather(*stories_media)
-        for media_list in stories_media_items:
-            for item in media_list:
-                media_manager.add_media(item)
 
         self.posts: list["PostModel"] = self.__user__._posts  # type: ignore
-        if self.posts:
-            posts_media = [content.awaitable_attrs.media for content in self.posts]
-            posts_media_items = await asyncio.gather(*posts_media)
-            for media_list in posts_media_items:
-                for item in media_list:
-                    media_manager.add_media(item)
+        posts_media = [content.awaitable_attrs.media for content in self.posts]
 
         self.messages: list["MessageModel"] = self.__user__._messages  # type: ignore
         messages_media = [content.awaitable_attrs.media for content in self.messages]
-        messages_media_items = await asyncio.gather(*messages_media)
-        for media_list in messages_media_items:
-            for item in media_list:
-                media_manager.add_media(item)
 
         self.mass_messages: list["MassMessageModel"] = self.__user__._mass_messages  # type: ignore
         mass_messages_media = [
             content.awaitable_attrs.media for content in self.mass_messages
         ]
-        mass_messages_media_items = await asyncio.gather(*mass_messages_media)
-        for media_list in mass_messages_media_items:
-            for item in media_list:
-                media_manager.add_media(item)
 
         if load_media:
+            stories_media_items = await asyncio.gather(*stories_media)
+            for media_list in stories_media_items:
+                for item in media_list:
+                    media_manager.add_media(item)
+            posts_media_items = await asyncio.gather(*posts_media)
+            for media_list in posts_media_items:
+                for item in media_list:
+                    media_manager.add_media(item)
+            messages_media_items = await asyncio.gather(*messages_media)
+            for media_list in messages_media_items:
+                for item in media_list:
+                    media_manager.add_media(item)
+            mass_messages_media_items = await asyncio.gather(*mass_messages_media)
+            for media_list in mass_messages_media_items:
+                for item in media_list:
+                    media_manager.add_media(item)
             await media_manager.init(media_ids=media_ids)
         return self
 
@@ -533,6 +534,7 @@ class SiteAPI:
         load_content: bool = False,
         load_media: bool = False,
         load_notifications: bool = False,
+        load_remote_urls: bool = False,
         limit: int | None = None,
         extra_options: Any = (),
     ):
@@ -542,6 +544,7 @@ class SiteAPI:
             user_info=load_user_info,
             alias=load_aliases,
             notifications=load_notifications,
+            remote_urls=load_remote_urls,
         )
         options += extra_options
         stmt_builder = (
@@ -570,11 +573,25 @@ class SiteAPI:
         load_user_info: bool = True,
         load_content: bool = False,
         load_media: bool = False,
-        authed_info_filter: AuthedInfoFilter | None = None,
+        load_notifications: bool = False,
+        load_remote_urls: bool = False,
         limit: int | None = None,
-        order_by: UnaryExpression[Any] | None = None,
         extra_options: Any = (),
+        authed_info_filter: AuthedInfoFilter | None = None,
+        order_by: UnaryExpression[Any] | None = None,
     ):
+        if identifiers:
+            if isinstance(identifiers, str):
+                identifiers = [identifiers]
+            for i, identifier in enumerate(identifiers):
+                if (
+                    identifier
+                    and isinstance(identifier, str)
+                    and identifier[0].lower() == "u"
+                ):
+                    temp_identifier = identifier[1:]
+                    if temp_identifier.isdigit():
+                        identifiers[i] = int(temp_identifier)
         stmt = self.get_user_query(
             identifiers,
             description,
@@ -584,6 +601,8 @@ class SiteAPI:
             load_user_info,
             load_content,
             load_media,
+            load_notifications,
+            load_remote_urls,
             limit,
             extra_options,
         )
@@ -605,9 +624,37 @@ class SiteAPI:
         session = self.get_session()
         result: ScalarResult[UserModel] = await session.scalars(stmt)
         db_users = result.all()
+        db_users = list(set(db_users))
         for db_user in db_users:
             if db_user and load_content:
                 await self.resolve_content_manager(db_user).init(load_media=load_media)
+        if isinstance(identifiers, list):
+            invalid_identifiers: list[str] = []
+            for identifier in identifiers:
+                if isinstance(identifier, str):
+                    found_db_user = None
+                    for db_user in db_users:
+                        found_db_user = await db_user.find_username(identifier)
+                        if found_db_user:
+                            break
+                    if not found_db_user:
+                        invalid_identifiers.append(identifier)
+            for invalid_identifier in invalid_identifiers:
+                stmt = select(UserAliasModel).where(
+                    UserAliasModel.username == invalid_identifier
+                )
+                db_alias = await session.scalar(stmt)
+                if db_alias:
+                    db_user = await self.get_user(
+                        db_alias.user_id,
+                        load_user_info=load_user_info,
+                        load_aliases=load_aliases,
+                        load_content=load_content,
+                        load_remote_urls=load_remote_urls,
+                        extra_options=extra_options,
+                    )
+                    if db_user:
+                        db_users.append(db_user)
         return db_users
 
     async def get_user(
@@ -621,6 +668,7 @@ class SiteAPI:
         load_content: bool = False,
         load_media: bool = False,
         load_notifications: bool = False,
+        load_remote_urls: bool = False,
         limit: int | None = None,
         extra_options: Any = (),
     ) -> UserModel | None:
@@ -638,15 +686,14 @@ class SiteAPI:
             load_content,
             load_media,
             load_notifications,
+            load_remote_urls,
             limit,
             extra_options,
         )
         session = self.get_session()
-
         result: ScalarResult[UserModel] = await session.scalars(stmt)
         db_user = result.first()
         if db_user and load_content:
-
             await self.resolve_content_manager(db_user).init(load_media=load_media)
 
         if not db_user and isinstance(identifier, str):
@@ -655,8 +702,10 @@ class SiteAPI:
             if db_alias:
                 db_user = await self.get_user(
                     db_alias.user_id,
+                    load_user_info=load_user_info,
                     load_aliases=load_aliases,
                     load_content=load_content,
+                    load_remote_urls=load_remote_urls,
                     extra_options=extra_options,
                 )
         return db_user
@@ -738,7 +787,10 @@ class SiteAPI:
         return found_media.unique().all()
 
     async def get_filepaths(
-        self, identifier: int | str | None = None, media_id: int | None = None
+        self,
+        identifier: int | str | None = None,
+        media_id: int | None = None,
+        post_id: int | None = None,
     ):
         stmt = select(FilePathModel)
 
@@ -750,6 +802,9 @@ class SiteAPI:
 
         if media_id is not None:
             stmt = stmt.where(FilePathModel.media_id == media_id)
+
+        if post_id is not None:
+            stmt = stmt.join(MediaModel).join(PostModel).where(PostModel.id == post_id)
 
         found_filepaths = await self.get_session().scalars(stmt)
         return found_filepaths.all()
@@ -870,22 +925,27 @@ class SiteAPI:
         await session.commit()
         return db_job
 
-    async def get_remote_url(self, user_id: int):
+    async def get_remote_urls(self, user_id: int):
         stmt = select(RemoteURLModel).where(RemoteURLModel.user_id == user_id)
-        found_remote_url = await self.get_session().scalar(stmt)
-        return found_remote_url
+        found_remote_urls = await self.get_session().scalars(stmt)
+        return found_remote_urls.all()
 
     async def create_or_update_remote_url(
-        self, user_id: int, host_id: int, url: str, uploaded_at: datetime
+        self, user_id: int, host_id: int, url: str, part: int, uploaded_at: datetime
     ):
         session = self.get_session()
-        stmt = select(RemoteURLModel).where(RemoteURLModel.user_id == user_id)
+        stmt = (
+            select(RemoteURLModel)
+            .where(RemoteURLModel.user_id == user_id)
+            .where(RemoteURLModel.part == part)
+        )
         found_remote_url = await session.scalar(stmt)
         if not found_remote_url:
             found_remote_url = RemoteURLModel(
                 user_id=user_id,
                 host_id=host_id,
                 url=url,
+                part=part,
                 uploaded_at=uploaded_at,
                 exists=True,
             )
@@ -921,6 +981,9 @@ class SiteAPI:
         api_user: ultima_scraper_api.user_types,
         existing_user: UserModel | None,
         performer_optimize: bool = False,
+        update_socials: bool = True,
+        skip_subscriptions: bool = False,
+        skip_paid_content: bool = False,
     ):
         session = self.get_session()
         db_user = existing_user or UserModel()
@@ -934,7 +997,10 @@ class SiteAPI:
         if not existing_user:
             session.add(db_user)
             await self.resolve_content_manager(db_user).init()
-        await session.commit()
+        try:
+            await session.commit()
+        except Exception as e:
+            pass
         await db_user.awaitable_attrs.medias
         await self.create_or_update_user_info(api_user, db_user)
         await db_user.update_username(api_user.username)
@@ -1019,11 +1085,15 @@ class SiteAPI:
                                 )
                                 db_user._mass_messages.append(db_mass_message)
                             pass
-                await self.create_or_update_paid_content(api_authed, db_user, [])
-            await self.process_subscriptions(api_authed, db_user, performer_optimize)
+                if not skip_paid_content:
+                    await self.create_or_update_paid_content(api_authed, db_user, [])
+            if not skip_subscriptions:
+                await self.process_subscriptions(
+                    api_authed, db_user, performer_optimize
+                )
         if isinstance(api_user, OFUserModel):
             status = True
-            if performer_optimize and api_user.is_performer():
+            if performer_optimize and api_user.is_performer() or not update_socials:
                 status = False
             if status:
                 socials = await api_user.get_socials()
@@ -1293,7 +1363,6 @@ class SiteAPI:
         db_content = found_db_content or await content_manager.add_content(content)
 
         content.__db_content__ = db_content
-        content.paid = False
         if isinstance(db_content, PostModel | MessageModel):
             db_content.update(content)
             if not db_content.paid:
@@ -1324,7 +1393,7 @@ class SiteAPI:
         media_manager = db_user.get_content_manager().media_manager
         found_media = media_manager.find_media(media.id)
         media_url = media.urls[0] if media.urls else None
-        if not media_url:
+        if not media_url and media.drm == False:
             return
         if not found_media:
             db_media = MediaModel(
@@ -1421,20 +1490,18 @@ class SiteAPI:
     ):
         unique_user_ids: set[int] = set()
         paid_contents = await api_authed.get_paid_content()
+        grouped_paid_contents = {}
+        # Group paid_contents by author.id
+        for paid_content in paid_contents:
+            if isinstance(paid_content, dict):
+                continue
+            author_id = paid_content.get_author().id
+            if author_id not in grouped_paid_contents:
+                grouped_paid_contents[author_id] = []
+            grouped_paid_contents[author_id].append(paid_content)
         with alive_bar(len(paid_contents)) as bar:
-            for paid_content in paid_contents:
-                if isinstance(paid_content, dict):
-                    continue
-                bar.title(f"Processing Paid Content: {db_user.username} ({db_user.id})")
-                if any(x in paid_content.text for x in print_filter):
-                    urls: list[str] = []
-                    for x in paid_content.media:
-                        url: ParseResult | None = paid_content.url_picker(x)
-                        if isinstance(url, ParseResult):
-                            urls.append(url.geturl())
-                    if urls:
-                        print(urls, f"{paid_content.id}\n")
-                supplier = paid_content.get_author()
+            for author_id, contents in grouped_paid_contents.items():
+                supplier = await api_authed.get_user(author_id)
                 local_user = await self.get_user(
                     supplier.id, load_content=True, load_media=True
                 )
@@ -1444,7 +1511,21 @@ class SiteAPI:
                     bought_content = BoughtContentModel(supplier_id=supplier.id)
                     db_user.bought_contents.append(bought_content)
                 unique_user_ids.add(supplier.id)
-                bar()
+                for paid_content in contents:
+                    if isinstance(paid_content, dict):
+                        continue
+                    bar.title(
+                        f"Processing Paid Content: {db_user.username} ({db_user.id})"
+                    )
+                    if any(x in paid_content.text for x in print_filter):
+                        urls: list[str] = []
+                        for x in paid_content.media:
+                            url: ParseResult | None = paid_content.url_picker(x)
+                            if isinstance(url, ParseResult):
+                                urls.append(url.geturl())
+                        if urls:
+                            print(urls, f"{paid_content.id}\n")
+                    bar()
         await self.get_session().commit()
         for supplier_user_id in unique_user_ids:
             if self.aio_pika_wrapper:

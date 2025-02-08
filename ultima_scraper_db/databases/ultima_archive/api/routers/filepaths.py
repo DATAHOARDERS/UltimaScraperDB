@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 from sqlalchemy import or_, orm, select, update
@@ -30,4 +32,7 @@ async def get_filepath_by_content_id(
     database_api = UAClient.database_api
     async with database_api.create_site_api(site_name) as site_api:
         filepaths = await site_api.get_filepaths(post_id=content_id)
+        for filepath in filepaths:
+            if not filepath.downloaded and Path(filepath.filepath).exists():
+                filepath.downloaded = True
         return filepaths
