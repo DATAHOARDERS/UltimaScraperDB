@@ -45,6 +45,7 @@ async def get_users(
     page: int,
     limit: int,
     order_by: str | None = None,
+    order_direction: str = "asc",  # new parameter to control sort direction
 ):
     database_api = UAClient.database_api
 
@@ -66,10 +67,16 @@ async def get_users(
             .options(orm.selectinload(UserModel.user_info))
         )
 
-        if order_by == "downloaded_at":
-            stmt = stmt.order_by(
-                nullslast(UserInfoModel.downloaded_at.desc()), UserModel.id
+        if order_by in ["downloaded_at", "size"]:
+            field = (
+                UserInfoModel.downloaded_at
+                if order_by == "downloaded_at"
+                else UserInfoModel.size
             )
+            if order_direction.lower() == "desc":
+                stmt = stmt.order_by(nullslast(field.desc()), UserModel.id)
+            else:
+                stmt = stmt.order_by(field, UserModel.id)
         else:
             stmt = stmt.order_by(UserModel.id)
         results = await site_api.get_session().scalars(stmt)
