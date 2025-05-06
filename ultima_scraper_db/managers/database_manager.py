@@ -9,6 +9,8 @@ from alembic import command
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from alembic.operations.ops import MigrationScript
+from alembic.runtime.environment import EnvironmentContext
+from alembic.script.base import ScriptDirectory
 from alembic.util import CommandError
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import Connection, MetaData, inspect
@@ -253,36 +255,55 @@ class Database:
             alembic_cfg = self.alembica.config
             if not current_rev:
                 try:
-                    _revision = await conn.run_sync(
+                    revision = await conn.run_sync(
                         run_revision, alembic_cfg, True, self.metadata
                     )
-                    pass
+                    return revision
                 except CommandError as _e:
                     await self.run_migrations()
                     pass
             else:
-                _revision = await conn.run_sync(
+                revision = await conn.run_sync(
                     run_revision, alembic_cfg, True, self.metadata
                 )
-                pass
+                return revision
             pass
 
     async def run_migrations(self) -> None:
+        if not self.alembica:
+            raise RuntimeError("Alembic configuration is missing.")
+
+        alembic_cfg = self.alembica.config
+        script = ScriptDirectory.from_config(alembic_cfg)
+
         def run_upgrade(connection: Connection, cfg: Config):
             cfg.attributes["connection"] = connection  # type:ignore
-            command.upgrade(alembic_cfg, "head")
+            command.upgrade(cfg, "head")
             return True
 
-        while True:
-            try:
-                async with self.engine.connect() as conn:
-                    assert self.alembica
-                    alembic_cfg = self.alembica.config
-                    _upgraded = await conn.run_sync(run_upgrade, alembic_cfg)
-                    break
-            except Exception as e:
-                print(e)
-                breakpoint()
+        try:
+            head_rev = script.get_current_head()
+            if head_rev:
+                current_rev = script.get_revision(head_rev)
+                with open(current_rev.path) as migration_file:
+                    migration_content = migration_file.read().split(
+                        "def downgrade() -> None:"
+                    )[0]
+                    if "drop_" in migration_content:
+                        if (
+                            input(
+                                "Database migration contains drop statements. Continue? (y/n): "
+                            ).lower()
+                            != "y"
+                        ):
+                            raise RuntimeError("Migration aborted by user.")
+
+            async with self.engine.connect() as conn:
+                await conn.run_sync(run_upgrade, alembic_cfg)
+
+        except Exception as e:
+            print(f"Migration error: {e}")
+            raise
 
     async def run_downgrade(self, version: str) -> None:
         def downgrade(connection: Connection, cfg: Config):

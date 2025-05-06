@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from ultima_scraper_api import SITE_LITERALS
 from inflection import singularize, underscore
 from pydantic import BaseModel
 from sqlalchemy import (
@@ -28,6 +29,9 @@ from ultima_scraper_api.apis.fansly.classes.extras import (
 from ultima_scraper_api.apis.onlyfans.classes.extras import (
     AuthDetails as OnlyFansAuthDetails,
 )
+
+from sqlalchemy import event
+from sqlalchemy.orm.attributes import AttributeEventToken
 from ultima_scraper_db.databases.ultima_archive import (
     CustomFuncs,
     DefaultContentTypes,
@@ -39,6 +43,7 @@ if TYPE_CHECKING:
     from ultima_scraper_collection.managers.metadata_manager.metadata_manager import (
         ContentMetadata,
     )
+
     from ultima_scraper_db.databases.ultima_archive.schemas.management import (
         HostModel,
         SiteModel,
@@ -329,9 +334,9 @@ class UserModel(SiteTemplate):
         active_subscription: bool | None = None,
         identifiers: list[int | str] = [],
     ):
-        if active is not None:
-            active_user = active
-            active_subscription = active
+        # if active is not None:
+        #     active_user = active
+        #     active_subscription = active
         temp_buyers: set[UserModel] = set()
         [temp_buyers.add(x.user) for x in self.find_auths()]
         for content in await self.get_supplied_content(active=active_user):
@@ -362,8 +367,12 @@ class UserModel(SiteTemplate):
         final_buyers.sort(key=lambda buyer: (buyer.id != self.id, buyer.id))
         return final_buyers
 
-
-from ultima_scraper_api import SITE_LITERALS
+    def find_authed_buyers(self, db_buyers: list["UserModel"]):
+        for db_buyer in db_buyers:
+            db_auth = db_buyer.find_auth()
+            if not db_auth:
+                continue
+            yield db_auth
 
 
 class UserAuthModel(SiteTemplate):
@@ -383,7 +392,7 @@ class UserAuthModel(SiteTemplate):
     def convert_to_auth_details(self, site_name: SITE_LITERALS):
         if site_name.lower() == "OnlyFans".lower():
             return OnlyFansAuthDetails(
-                id=self.id,
+                id=self.user_id,
                 username=self.user.username,
                 cookie=self.cookie,
                 x_bc=self.x_bc,
@@ -394,7 +403,7 @@ class UserAuthModel(SiteTemplate):
             )
         else:
             return FanslyAuthDetails(
-                id=self.id,
+                id=self.user_id,
                 username=self.user.username,
                 authorization=self.authorization,
                 user_agent=self.user_agent,
@@ -611,6 +620,7 @@ class StoryModel(ContentTemplate):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"))
+    media_count: Mapped[int] = mapped_column(Integer, server_default="0", default=0)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ)
 
     user: Mapped["UserModel"] = relationship(
@@ -670,6 +680,7 @@ class PostModel(ContentTemplate):
     deleted: Mapped[bool] = mapped_column(Boolean, server_default="false")
     archived: Mapped[bool] = mapped_column(Boolean, server_default="false")
     paid: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    media_count = mapped_column(Integer, server_default="0", default=0)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ)
 
     user: Mapped["UserModel"] = relationship(
@@ -737,6 +748,7 @@ class MessageModel(ContentTemplate):
     deleted: Mapped[bool] = mapped_column(Boolean, server_default="false")
     paid: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     verified: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    media_count = mapped_column(Integer, server_default="0", default=0)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ)
 
     user: Mapped["UserModel"] = relationship(
@@ -782,6 +794,7 @@ class MassMessageModel(ContentTemplate):
     )
     text: Mapped[str] = mapped_column(Text, nullable=True)
     price: Mapped[float] = mapped_column(Float)
+    media_count = mapped_column(Integer, server_default="0", default=0)
     expires_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ)
 
@@ -868,10 +881,6 @@ class UserAliasModel(SiteTemplate):
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"))
     username: Mapped[str] = mapped_column(String(50))
     user: Mapped["UserModel"] = relationship(back_populates="aliases")
-
-
-from sqlalchemy import event
-from sqlalchemy.orm.attributes import AttributeEventToken
 
 
 @event.listens_for(SubscriptionModel.downloaded_at, "set", propagate=True)

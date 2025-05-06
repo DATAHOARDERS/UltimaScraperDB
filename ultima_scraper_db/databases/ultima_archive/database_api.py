@@ -9,6 +9,8 @@ from ultima_scraper_db.managers.database_manager import Database, DatabaseAPI_, 
 
 class ArchiveAPI(DatabaseAPI_):
     def __init__(self, database: Database) -> None:
+        from ultima_scraper_collection.managers.server_manager import ServerManager
+
         super().__init__(database)
 
         self.management_api: ManagementAPI = self.create_management_api()
@@ -18,11 +20,11 @@ class ArchiveAPI(DatabaseAPI_):
             supported_site = supported_site.lower()
             self.site_apis[supported_site] = self.create_site_api(supported_site)
         self.fast_api = UAClient(database_api=self)
+        self.server_manager = ServerManager(self)
 
     async def init(self):
-        from ultima_scraper_collection.managers.server_manager import ServerManager
 
-        self.server_manager = await ServerManager(self).init(self.database)
+        await self.server_manager.init(self.database)
         return self
 
     def create_management_api(self):
@@ -52,11 +54,11 @@ class ArchiveAPI(DatabaseAPI_):
 
         for site_name in SUPPORTED_SITES:
             site_api = ultima_scraper_api.select_api(site_name)
-            async with self.create_site_api(site_name) as db_site_api:
+            async with self.create_site_api(site_name) as site_db_api:
                 authed_info_filter = AuthedInfoFilter(
                     exclude_between_dates=get_date_range_past_days(), active=True
                 )
-                db_users = await db_site_api.get_users(
+                db_users = await site_db_api.get_users(
                     authed_info_filter=authed_info_filter,
                     order_by=UserModel.last_checked_at.asc(),
                 )
@@ -71,9 +73,9 @@ class ArchiveAPI(DatabaseAPI_):
                                 await db_auth_info.deactivate()
                             else:
                                 print(f"User {db_user.username} logged in.")
-                                await db_site_api.create_or_update_user(
+                                await site_db_api.create_or_update_user(
                                     authed.user, db_user, performer_optimize=True
                                 )
                                 break
-                    await db_site_api.get_session().commit()
+                    await site_db_api.get_session().commit()
         return True

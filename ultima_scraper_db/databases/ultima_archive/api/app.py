@@ -11,6 +11,7 @@ router_names = [
     "media_detections",
     "sites",
     "hosts",
+    "search",
 ]
 
 for name in router_names:

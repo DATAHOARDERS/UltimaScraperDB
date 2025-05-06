@@ -12,7 +12,7 @@ from inflection import underscore
 from sqlalchemy import ScalarResult, Select, UnaryExpression, delete, or_, orm, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.ext.asyncio.session import async_object_session
-from sqlalchemy.orm import joinedload, selectinload
+from sqlalchemy.orm import joinedload, noload, selectinload
 from sqlalchemy.sql import and_, exists, func, select, union_all
 from ultima_scraper_api.apis.fansly.classes.extras import (
     AuthDetails as FanslyAuthDetails,
@@ -33,6 +33,7 @@ from ultima_scraper_collection.managers.aio_pika_wrapper import (
     AioPikaWrapper,
     create_notification,
 )
+
 from ultima_scraper_db.databases.ultima_archive.filters import AuthedInfoFilter
 from ultima_scraper_db.databases.ultima_archive.schemas.management import SiteModel
 from ultima_scraper_db.databases.ultima_archive.schemas.templates.site import (
@@ -726,11 +727,18 @@ class SiteAPI:
 
     async def get_posts(
         self,
+        user_id: int | None = None,
         post_id: int | None = None,
         text: str | None = None,
+        ppv: bool | None = None,
         paid: bool | None = None,
+        load_media: bool = True,
     ):
         stmt = select(PostModel)
+        if user_id is not None:
+            stmt = stmt.where(PostModel.user_id == user_id)
+        if ppv is not None:
+            stmt = stmt.where(PostModel.price > 0)
         if paid is not None:
             stmt = stmt.where(PostModel.paid == paid)
         if text is not None:
@@ -738,17 +746,28 @@ class SiteAPI:
             for text_item in text_list:
                 text_item = text_item.strip()
                 stmt = stmt.where(PostModel.text.icontains(text_item))
-        stmt = stmt.options(joinedload(PostModel.user))
+
+        options: list[_AbstractLoad] = [joinedload(PostModel.user)]
+        if not load_media:
+            options.append(noload(PostModel.media))
+        stmt = stmt.options(*options)
         found_posts = await self.get_session().scalars(stmt)
-        return found_posts.all()
+        return found_posts.unique().all()
 
     async def get_messages(
         self,
+        user_id: int | None = None,
         message_id: int | None = None,
         text: str | None = None,
+        ppv: bool | None = None,
         paid: bool | None = None,
+        load_media: bool = True,
     ):
         stmt = select(MessageModel)
+        if user_id is not None:
+            stmt = stmt.where(MessageModel.user_id == user_id)
+        if ppv is not None:
+            stmt = stmt.where(MessageModel.price > 0)
         if paid is not None:
             stmt = stmt.where(MessageModel.paid == paid)
         if text is not None:
@@ -756,7 +775,10 @@ class SiteAPI:
             for text_item in text_list:
                 text_item = text_item.strip()
                 stmt = stmt.where(MessageModel.text.icontains(text_item))
-        stmt = stmt.options(joinedload(MessageModel.user))
+        options: list[_AbstractLoad] = [joinedload(MessageModel.user)]
+        if not load_media:
+            options.append(noload(MessageModel.media))
+        stmt = stmt.options(*options)
         found_contents = await self.get_session().scalars(stmt)
         return found_contents.all()
 
@@ -927,6 +949,11 @@ class SiteAPI:
 
     async def get_remote_urls(self, user_id: int):
         stmt = select(RemoteURLModel).where(RemoteURLModel.user_id == user_id)
+        found_remote_urls = await self.get_session().scalars(stmt)
+        return found_remote_urls.all()
+
+    async def get_bulk_remote_urls(self, user_ids: list[int]):
+        stmt = select(RemoteURLModel).where(RemoteURLModel.user_id.in_(user_ids))
         found_remote_urls = await self.get_session().scalars(stmt)
         return found_remote_urls.all()
 
