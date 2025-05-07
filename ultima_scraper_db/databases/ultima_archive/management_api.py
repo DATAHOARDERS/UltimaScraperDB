@@ -29,7 +29,6 @@ class ManagementAPI:
         return self
 
     async def __aexit__(self, exc_type: None, exc_value: None, traceback: None):
-
         await self._session.commit()
         await self._session.aclose()
 

@@ -117,6 +117,19 @@ class Database:
         self.alembica = alembica
         self._echo = True
 
+    async def clone(self):
+        database = Database(
+            self.name,
+            self.host,
+            self.port,
+            self.username,
+            self.password,
+            self.ssh,
+            self.metadata,
+            self.alembica,
+        )
+        return await database.init_db(self._echo)
+
     def handle_ssh(
         self, ssh_auth_info: dict[str, Any], local_host: str, local_port: int
     ):

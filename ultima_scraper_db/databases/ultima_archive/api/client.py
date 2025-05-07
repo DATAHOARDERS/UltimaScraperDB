@@ -24,17 +24,17 @@ class UAClient(RestAPI):
 
         super().__init__()
         self.include_routers(routers)
-        UAClient.database_api = self.database_api = database_api
-        pass
+        self.database_api = database_api
+        UAClient.database_api = self.database_api
 
     async def init(self, config: "UltimaScraperCollectionConfig"):
         from ultima_scraper_collection.managers.datascraper_manager.datascraper_manager import (
             DataScraperManager,
         )
 
-        UAClient.config = self.config = config
-        UAClient.datascraper_manager = DataScraperManager(
-            UAClient.database_api.server_manager, config
+        self.config = config
+        self.datascraper_manager = DataScraperManager(
+            self.database_api.server_manager, config
         )
         return self
 

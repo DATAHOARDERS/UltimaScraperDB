@@ -20,8 +20,7 @@ async def run(config: UltimaScraperCollectionConfig):
     #     await database.run_migrations()
     ultima_archive_db_api = ArchiveAPI(database)
     await ultima_archive_db_api.init()
-    await ultima_archive_db_api.fast_api.init(config)
-    ultima_archive_db_api.activate_api(ultima_archive_db_api.fast_api, 2140)
+    await ultima_archive_db_api.activate_fast_api(await database.clone(), config, 2140)
     ultima_archive_db_api.server.join()
 
 

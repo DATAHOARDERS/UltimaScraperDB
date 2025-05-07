@@ -33,7 +33,6 @@ from ultima_scraper_collection.managers.aio_pika_wrapper import (
     AioPikaWrapper,
     create_notification,
 )
-
 from ultima_scraper_db.databases.ultima_archive.filters import AuthedInfoFilter
 from ultima_scraper_db.databases.ultima_archive.schemas.management import SiteModel
 from ultima_scraper_db.databases.ultima_archive.schemas.templates.site import (
@@ -492,7 +491,6 @@ class SiteAPI:
         return self
 
     async def __aexit__(self, exc_type: None, exc_value: None, traceback: None):
-
         await self._session.commit()
         await self._session.aclose()
         self.content_managers.clear()
@@ -1410,6 +1408,7 @@ class SiteAPI:
         if isinstance(db_content, MessageModel):
             db_content.verified = True
         db_content.created_at = content.created_at
+        db_content.media_count = content.__soft__.media_count
 
     async def create_or_update_media(self, db_user: UserModel, media: "MediaMetadata"):
         assert media.id
