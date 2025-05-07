@@ -1,7 +1,6 @@
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from ultima_scraper_api import SITE_LITERALS
 from inflection import singularize, underscore
 from pydantic import BaseModel
 from sqlalchemy import (
@@ -16,6 +15,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     and_,
+    event,
     exists,
     func,
     select,
@@ -23,6 +23,8 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import async_object_session
 from sqlalchemy.ext.compiler import compiles  # type: ignore
 from sqlalchemy.orm import Mapped, backref, mapped_column, relationship
+from sqlalchemy.orm.attributes import AttributeEventToken
+from ultima_scraper_api import SITE_LITERALS
 from ultima_scraper_api.apis.fansly.classes.extras import (
     AuthDetails as FanslyAuthDetails,
 )
@@ -30,8 +32,6 @@ from ultima_scraper_api.apis.onlyfans.classes.extras import (
     AuthDetails as OnlyFansAuthDetails,
 )
 
-from sqlalchemy import event
-from sqlalchemy.orm.attributes import AttributeEventToken
 from ultima_scraper_db.databases.ultima_archive import (
     CustomFuncs,
     DefaultContentTypes,
@@ -620,7 +620,6 @@ class StoryModel(ContentTemplate):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"))
-    media_count: Mapped[int] = mapped_column(Integer, server_default="0", default=0)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ)
 
     user: Mapped["UserModel"] = relationship(

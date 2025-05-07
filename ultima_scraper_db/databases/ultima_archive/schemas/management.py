@@ -1,5 +1,6 @@
 from sqlalchemy import BigInteger, Boolean, SmallInteger, Text, orm, select
 from sqlalchemy.orm import Mapped, mapped_column
+
 from ultima_scraper_db.databases.ultima_archive import ManagementTemplate
 from ultima_scraper_db.databases.ultima_archive.schemas.templates.site import (
     JobModel,
@@ -42,7 +43,9 @@ class HostModel(ManagementTemplate):
     active: Mapped[bool] = mapped_column(Boolean, server_default="True")
 
 
-default_sites = [
-    SiteModel(name="OnlyFans", db_name="onlyfans", url="https://onlyfans.com"),
-    SiteModel(name="Fansly", db_name="fansly", url="https://fansly.com"),
-]
+def get_default_sites():
+    default_sites = [
+        SiteModel(name="OnlyFans", db_name="onlyfans", url="https://onlyfans.com"),
+        SiteModel(name="Fansly", db_name="fansly", url="https://fansly.com"),
+    ]
+    return default_sites
