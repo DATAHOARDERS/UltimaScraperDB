@@ -1,4 +1,4 @@
-from sqlalchemy import BigInteger, Boolean, SmallInteger, Text, orm, select
+from sqlalchemy import BigInteger, Boolean, SmallInteger, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ultima_scraper_db.databases.ultima_archive import ManagementTemplate

@@ -25,7 +25,7 @@ from ultima_scraper_api.apis.onlyfans.classes.extras import (
     AuthDetails as OnlyFansAuthDetails,
 )
 from ultima_scraper_api.apis.onlyfans.classes.user_model import (
-    create_user as OFUserModel,
+    UserModel as OFUserModel,
 )
 from ultima_scraper_api.helpers.main_helper import split_string
 from ultima_scraper_collection.helpers.main_helper import is_notif_valuable
@@ -1219,7 +1219,7 @@ class SiteAPI:
         subscription_user: ultima_scraper_api.user_types,
         db_user: "UserModel",
     ):
-        from ultima_scraper_api.apis.onlyfans.classes.user_model import create_user
+        from ultima_scraper_api.apis.onlyfans.classes.user_model import UserModel
 
         await db_user.awaitable_attrs.user_info
         if not db_user.user_info:
@@ -1233,15 +1233,15 @@ class SiteAPI:
         user_info.image_count = subscription_user.photos_count
         user_info.video_count = subscription_user.videos_count
         user_info.audio_count = subscription_user.audios_count
-        if isinstance(subscription_user, create_user):
+        if isinstance(subscription_user, UserModel):
             user_info.stream_count = subscription_user.finished_streams_count
         user_info.archived_post_count = subscription_user.archived_posts_count
-        if isinstance(subscription_user, create_user):
+        if isinstance(subscription_user, UserModel):
             user_info.private_archived_post_count = (
                 subscription_user.private_archived_posts_count
             )
         user_info.favourited_count = subscription_user.favorited_count
-        if isinstance(subscription_user, create_user):
+        if isinstance(subscription_user, UserModel):
             user_info.favourites_count = subscription_user.favorites_count
         user_info.subscribers_count = subscription_user.subscribers_count or 0
         user_info.location = subscription_user.location
@@ -1249,7 +1249,7 @@ class SiteAPI:
 
         user_info.promotion = (
             bool(await subscription_user.get_promotions())
-            if isinstance(subscription_user, create_user)
+            if isinstance(subscription_user, UserModel)
             else False
         )
         user_info.location = subscription_user.location
