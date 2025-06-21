@@ -159,6 +159,11 @@ def create_merged_metadata(base: UltimaBase | Any, remove_this: dict[str, Any] =
                 new_table.to_metadata(
                     merged_metadata, referred_schema_fn=referred_schema_fn
                 )
+                # if "status" in t.c:
+                #     t.c.status.schema = site_metadata.schema
+                # if _k == "jobs":
+                #     pass
+                pass
         else:
             if remove_this:
                 if t.key == remove_this["table"]:

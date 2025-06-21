@@ -1,4 +1,5 @@
 from datetime import datetime
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from inflection import singularize, underscore
@@ -6,6 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    Enum,
     Float,
     ForeignKey,
     Index,
@@ -19,7 +21,9 @@ from sqlalchemy import (
     exists,
     func,
     select,
+    text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import async_object_session
 from sqlalchemy.ext.compiler import compiles  # type: ignore
 from sqlalchemy.orm import Mapped, backref, mapped_column, relationship
@@ -69,10 +73,19 @@ standard_unique_constraints = (
         "media_id",
     ),
 )
+from sqlalchemy import Index
 
 
 class UserModel(SiteTemplate):
     __tablename__ = "users"
+    __table_args__ = (
+        Index(
+            "idx_users_username_trgm",
+            "username",
+            postgresql_using="gin",
+            postgresql_ops={"username": "gin_trgm_ops"},
+        ),
+    )
     __allow_unmapped__ = True
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
     username: Mapped[str] = mapped_column(Text, nullable=True)
@@ -391,7 +404,7 @@ class UserAuthModel(SiteTemplate):
 
     def convert_to_auth_details(self, site_name: SITE_LITERALS):
         if site_name.lower() == "OnlyFans".lower():
-            return OnlyFansAuthDetails(
+            details = OnlyFansAuthDetails(
                 id=self.user_id,
                 username=self.user.username,
                 cookie=self.cookie,
@@ -402,7 +415,7 @@ class UserAuthModel(SiteTemplate):
                 active=self.user.active,
             )
         else:
-            return FanslyAuthDetails(
+            details= FanslyAuthDetails(
                 id=self.user_id,
                 username=self.user.username,
                 authorization=self.authorization,
@@ -411,6 +424,7 @@ class UserAuthModel(SiteTemplate):
                 password=self.password,
                 active=self.user.active,
             )
+        return details
 
     def update(self, info: dict[str, Any]):
         for k, v in info.items():
@@ -893,6 +907,26 @@ def update_downloaded_at(
         subscription.user.downloaded_at = value
 
 
+from sqlalchemy.dialects.postgresql import ENUM as PgEnum
+
+
+class JobStatus(StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    RETRYING = "retrying"
+
+
+jobstatus_enum = PgEnum(
+    JobStatus,
+    name="jobstatus",  # must exactly match the name of your Postgres ENUM type
+    schema="public",  # if it's in the 'public' schema (which is default in most cases)
+    create_type=True,  # prevents SQLAlchemy from trying to auto-create it
+)
+
+
 class JobModel(SiteTemplate):
     __tablename__ = "jobs"
     __table_args__ = (UniqueConstraint("site_id", "user_id", "category"),)
@@ -902,6 +936,7 @@ class JobModel(SiteTemplate):
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"))
     user_username: Mapped[str] = mapped_column(Text)
     category: Mapped[str] = mapped_column(Text)
+    options: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     server_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("management.servers.id")
     )
@@ -910,8 +945,15 @@ class JobModel(SiteTemplate):
     )
     skippable: Mapped[bool] = mapped_column(Boolean, server_default="false")
 
-    priority: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    priority: Mapped[int] = mapped_column(Integer, server_default="0")
+    status: Mapped[str] = mapped_column(
+        jobstatus_enum,
+        nullable=True,
+        default=JobStatus.QUEUED,
+        # server_default=text(f"'{JobStatus.QUEUED}'"),
+    )
     active: Mapped[bool] = mapped_column(Boolean, server_default="true")
+    heartbeat_at: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ, nullable=True)
     user: Mapped[UserModel] = relationship(back_populates="jobs")
     site: Mapped["SiteModel"] = selectin_relationship(foreign_keys=site_id)

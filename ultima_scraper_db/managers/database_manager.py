@@ -1,3 +1,4 @@
+import argparse
 import itertools
 import random
 from pathlib import Path
@@ -23,7 +24,11 @@ from sqlalchemy.ext.asyncio import (
 from sshtunnel import SSHTunnelForwarder  # type: ignore
 
 from ultima_scraper_db.databases.rest_api import RestAPI
-from ultima_scraper_db.helpers import create_database, database_exists
+from ultima_scraper_db.helpers import create_database, database_exists, test_connection
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--dev", action="store_true", help="Enable dev mode")
+args = parser.parse_args()
 
 if TYPE_CHECKING:
     from ultima_scraper_db.databases.ultima_archive.api.client import UAClient
@@ -32,16 +37,11 @@ if TYPE_CHECKING:
 class Alembica:
     def __init__(
         self,
-        database_path: str | Path | None = None,
+        database_path: str | Path,
         generate: bool = False,
         migrate: bool = False,
     ) -> None:
-        if not database_path:
-            self.database_path = Path(__file__).parent.parent.joinpath(
-                "databases/ultima_archive"
-            )
-        else:
-            self.database_path = Path(database_path)
+        self.database_path = Path(database_path)
         assert self.database_path.exists(), "Invalid database directory"
         self.migration_directory = self.database_path.joinpath("alembic")
         self.config = Config(self.database_path.joinpath("alembic.ini"))
@@ -133,7 +133,7 @@ class Database:
     def handle_ssh(
         self, ssh_auth_info: dict[str, Any], local_host: str, local_port: int
     ):
-        if ssh_auth_info["host"]:
+        if ssh_auth_info["active"] and ssh_auth_info["host"]:
             private_key_filepath = ssh_auth_info["private_key_filepath"]
             ssh_private_key_password = ssh_auth_info["private_key_password"]
             private_key = (
@@ -169,9 +169,16 @@ class Database:
             max_overflow=20,
         )
         self.engine = engine
-
+        # Use 'postgres' as the database for the test connection
+        await test_connection(connection_string.replace(f"/{self.name}", "/postgres"))
         if not await database_exists(connection_string):
-            await self.setup()
+            confirm = input(
+                f"Database '{self.name}' does not exist. Create it? (y/n): "
+            )
+            if confirm.lower() == "y":
+                await self.setup()
+            else:
+                raise RuntimeError("Database setup aborted by user.")
         from sqlalchemy.schema import CreateSchema
 
         async with engine.connect() as conn:
@@ -360,7 +367,7 @@ class DatabaseManager:
 def thread_function(fast_api: "UAClient", port: int):
     uvicorn.run(  # type: ignore
         fast_api,
-        host="0.0.0.0",
+        host="localhost" if not args.dev else "0.0.0.0",
         port=port,
         log_level="debug",
     )

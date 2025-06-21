@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "ultima-scraper-db"
-version = "0.4.12"
+version = "0.4.13"
 description = ""
 authors = ["UltimaHoarder <1285176+UltimaHoarder@users.noreply.github.com>"]
 readme = "README.md"
@@ -23,6 +23,7 @@ fastapi-pagination = "^0.12.6"
 inflection = "^0.5.1"
 slowapi = "^0.1.9"
 platformdirs = "^4.2.2"
+alembic-postgresql-enum = "^1.7.0"
 
 
 [build-system]

@@ -31,7 +31,6 @@ from ultima_scraper_db.databases.ultima_archive.site_api import ContentManager
 
 restricted = (
     lazyload(UserModel.user_auths_info),
-    orm.defer(UserModel.performer),
     orm.defer(UserModel.favorite),
     orm.defer(UserModel.balance),
     orm.defer(UserModel.spend),
@@ -132,7 +131,6 @@ async def get_users(
         else:
             stmt = stmt.order_by(UserModel.id)
 
-        # Execute the query
         results = await site_db_api.get_session().execute(stmt)
 
         # Process results
@@ -172,6 +170,14 @@ async def read(
             extra_options=restricted,
         )
         if user:
+            if options.subscriptions:
+                await user.awaitable_attrs.subscriptions
+            if options.subscribers:
+                await user.awaitable_attrs.subscribers
+            if options.auths:
+                await user.awaitable_attrs.user_auths_info
+            if options.bought_contents:
+                await user.awaitable_attrs.bought_contents
             await user.awaitable_attrs.aliases
             await user.awaitable_attrs.user_info
         else:

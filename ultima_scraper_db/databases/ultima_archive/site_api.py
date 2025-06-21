@@ -1,7 +1,7 @@
 import asyncio
 import gc
 import weakref
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Sequence, Type
 from urllib.parse import ParseResult
@@ -24,16 +24,13 @@ from ultima_scraper_api.apis.onlyfans.classes.comment_model import (
 from ultima_scraper_api.apis.onlyfans.classes.extras import (
     AuthDetails as OnlyFansAuthDetails,
 )
-from ultima_scraper_api.apis.onlyfans.classes.user_model import (
-    UserModel as OFUserModel,
-)
+from ultima_scraper_api.apis.onlyfans.classes.user_model import UserModel as OFUserModel
 from ultima_scraper_api.helpers.main_helper import split_string
 from ultima_scraper_collection.helpers.main_helper import is_notif_valuable
 from ultima_scraper_collection.managers.aio_pika_wrapper import (
     AioPikaWrapper,
     create_notification,
 )
-
 from ultima_scraper_db.databases.ultima_archive.filters import AuthedInfoFilter
 from ultima_scraper_db.databases.ultima_archive.schemas.management import SiteModel
 from ultima_scraper_db.databases.ultima_archive.schemas.templates.site import (
@@ -43,6 +40,7 @@ from ultima_scraper_db.databases.ultima_archive.schemas.templates.site import (
     ContentTemplate,
     FilePathModel,
     JobModel,
+    JobStatus,
     MassMessageModel,
     MassMessageStatModel,
     MediaModel,
@@ -872,7 +870,8 @@ class SiteAPI:
         performer_id: int | None = None,
         user_id: int | None = None,
         category: str | None = None,
-        priority: bool | None = None,
+        priority: int | None = None,
+        status: JobStatus | None = None,
         active: bool | None = None,
         page: int = 1,
         limit: int | None = 100,
@@ -889,6 +888,8 @@ class SiteAPI:
             stmt = stmt.filter_by(user_id=user_id)
         if category:
             stmt = stmt.filter_by(category=category)
+        if status:
+            stmt = stmt.filter_by(status=status)
         if priority is not None:
             stmt = stmt.filter_by(priority=priority)
         if active is not None:
@@ -912,9 +913,10 @@ class SiteAPI:
         self,
         db_user: UserModel,
         category: str,
+        options: dict[str, Any] | None = None,
         server_id: int = 1,
         host_id: int | None = None,
-        priority: bool = False,
+        priority: int = 0,
         skippable: bool = False,
     ):
         session = self.get_session()
@@ -926,17 +928,24 @@ class SiteAPI:
             db_job.user_id = db_user.id
             db_job.user_username = db_user.username
             db_job.category = category
+            db_job.options = options
             db_job.server_id = server_id
             db_job.priority = priority
             db_job.host_id = host_id
             db_job.skippable = skippable
             db_job.active = True
+            db_job.status = (
+                JobStatus.QUEUED
+                if db_job.status != JobStatus.RUNNING
+                else db_job.status
+            )
         else:
             db_job = JobModel(
                 site_id=db_site.id,
                 user_id=db_user.id,
                 user_username=db_user.username,
                 category=category,
+                options=options,
                 server_id=server_id,
                 host_id=host_id,
                 skippable=skippable,
@@ -945,6 +954,46 @@ class SiteAPI:
             session.add(db_job)
         await session.commit()
         return db_job
+
+    async def fetch_next_job(self, categories: list[str] | None = None):
+        session = self.resolve_session()
+
+        now = datetime.now(timezone.utc)
+        timeout_threshold = now - timedelta(minutes=5)
+
+        stmt = select(JobModel).where(
+            or_(
+                JobModel.status.in_([JobStatus.QUEUED, JobStatus.RETRYING]),
+                and_(
+                    JobModel.status == JobStatus.RUNNING,
+                    or_(
+                        JobModel.heartbeat_at == None,  # NULL heartbeat means stale
+                        JobModel.heartbeat_at < timeout_threshold,
+                    ),
+                ),
+            )
+        )
+
+        if categories:
+            stmt = stmt.where(JobModel.category.in_(categories))
+
+        stmt = (
+            stmt.order_by(
+                JobModel.priority.desc(), JobModel.id.asc(), JobModel.heartbeat_at.asc()
+            )
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        )
+
+        result = await session.execute(stmt)
+        job = result.scalar_one_or_none()
+
+        if job:
+            job.status = JobStatus.RUNNING
+            job.heartbeat_at = now
+            await session.commit()
+
+        return job
 
     async def get_remote_urls(self, user_id: int):
         stmt = select(RemoteURLModel).where(RemoteURLModel.user_id == user_id)

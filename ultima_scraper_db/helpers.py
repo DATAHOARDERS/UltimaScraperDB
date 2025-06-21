@@ -1,3 +1,4 @@
+import re
 from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
@@ -36,6 +37,21 @@ async def _get_scalar_result(engine: AsyncEngine, sql: sa.TextClause):
             return await conn.scalar(sql)
     except Exception as _e:
         return False
+
+
+async def test_connection(url: str):
+    """
+    Test the database connection by executing a simple query.
+    Returns True if the connection is successful, False otherwise.
+    """
+    url_obj = make_url(url)
+    engine = create_async_engine(url_obj)
+
+    try:
+        async with engine.connect() as conn:
+            return True
+    except OSError as _e:
+        raise Exception("Database connection invalid")
 
 
 async def database_exists(url: str):
@@ -175,3 +191,13 @@ def has_detected_media(media_manager: "MediaManager"):
         if item.media_detections:
             return True
     return False
+
+
+def extract_identifier_from_url(url: str) -> str:
+    """Extract identifier from the URL."""
+    pattern = r"https?://onlyfans\.com/([a-zA-Z0-9_.]+)"
+    match = re.match(pattern, url)
+    if match:
+        return match.group(1)
+
+    return url  # Return the input if it doesn't match the pattern.

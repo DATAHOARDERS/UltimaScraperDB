@@ -1,7 +1,8 @@
+from typing import Any
+
 from fastapi import APIRouter
 from pydantic import BaseModel
-from sqlalchemy import update
-
+from sqlalchemy import ScalarResult, Select, func, or_, select, update
 from ultima_scraper_db.databases.ultima_archive.api.client import UAClient
 from ultima_scraper_db.databases.ultima_archive.schemas.templates.site import JobModel
 
@@ -23,10 +24,43 @@ router = APIRouter(
 
 
 class JobData(BaseModel):
-    server_id: int | None = None
-    performer_id: int | None = None
-    username: str | None = None
-    category: str | None = None
+    class OptionData(BaseModel):
+        class MandatoryJob(BaseModel):
+            job_name: str
+            success_queue_name: str | None = None
+            failure_queue_name: str | None = None
+
+        mandatory_jobs: list[MandatoryJob] = []
+        ppv_only: bool | None = None
+        extra_data: dict[str, Any] = {}
+
+        def create_mandatory_job(
+            self,
+            job_name: str,
+            success_queue_name: str | None = None,
+            failure_queue_name: str | None = None,
+        ) -> "JobData.OptionData.MandatoryJob":
+            # Check if a job with the same job_name already exists
+            for job in self.mandatory_jobs:
+                if job.job_name == job_name:
+                    return job  # Return the existing job if found
+
+            # If no match is found, create and add the new job
+            mandatory_job = self.MandatoryJob(
+                job_name=job_name,
+                success_queue_name=success_queue_name,
+                failure_queue_name=failure_queue_name,
+            )
+            self.mandatory_jobs.append(mandatory_job)
+            return mandatory_job
+
+    site_name: str
+    user_id: int
+    username: str
+    category: str
+    options: OptionData = OptionData()
+    server_id: int = 1
+    priority: int = 0
     host_id: int | None = None
     skippable: bool = False
     active: bool | None = None
@@ -60,25 +94,26 @@ async def get_jobs(
     return jobs
 
 
-@router.post("/{site_name}/create")
+@router.post("/create")
 async def create_job(
-    job_type: JobData,
-    site_name: str,
+    job: JobData,
 ):
     database_api = UAClient.database_api
 
-    site_api = database_api.get_site_api(site_name)
+    site_api = database_api.get_site_api(job.site_name)
     async with site_api as site_api:
-        user = await site_api.get_user(job_type.performer_id)
+        user = await site_api.get_user(job.user_id)
         if user:
-            assert job_type.server_id
-            assert job_type.category
-            _job = await site_api.create_or_update_job(
+            assert job.server_id
+            assert job.category
+            _db_job = await site_api.create_or_update_job(
                 user,
-                job_type.category,
-                server_id=job_type.server_id,
-                host_id=job_type.host_id,
-                skippable=job_type.skippable,
+                job.category,
+                server_id=job.server_id,
+                host_id=job.host_id,
+                skippable=job.skippable,
+                options=job.options.model_dump() if job.options else None,
+                priority=job.priority,
             )
             await user.awaitable_attrs.subscribers
             return user
