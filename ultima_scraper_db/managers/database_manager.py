@@ -367,7 +367,7 @@ class DatabaseManager:
 def thread_function(fast_api: "UAClient", port: int):
     uvicorn.run(  # type: ignore
         fast_api,
-        host="localhost" if not args.dev else "0.0.0.0",
+        host="127.0.0.1" if not args.dev else "0.0.0.0",
         port=port,
         log_level="debug",
     )
