@@ -17,8 +17,6 @@ class RestAPI(FastAPI):
         self.state.limiter = self.limiter
         self.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore
         self.add_middleware(SlowAPIMiddleware)
-        self.root_path = "./"
-        self.proxy_headers = True
 
     def include_routers(self, routers: list[APIRouter]):
         [self.include_router(x) for x in routers]

@@ -22,7 +22,10 @@ class UAClient(RestAPI):
 
         from ultima_scraper_db.databases.ultima_archive.api.app import routers
 
-        super().__init__()
+        super().__init__(
+            root_path="./",
+            proxy_headers=True,
+        )
         self.include_routers(routers)
         self.database_api = database_api
         UAClient.database_api = self.database_api
