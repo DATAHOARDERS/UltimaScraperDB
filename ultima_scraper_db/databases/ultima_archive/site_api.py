@@ -31,6 +31,7 @@ from ultima_scraper_collection.managers.aio_pika_wrapper import (
     AioPikaWrapper,
     create_notification,
 )
+
 from ultima_scraper_db.databases.ultima_archive.filters import AuthedInfoFilter
 from ultima_scraper_db.databases.ultima_archive.schemas.management import SiteModel
 from ultima_scraper_db.databases.ultima_archive.schemas.templates.site import (
@@ -490,8 +491,11 @@ class SiteAPI:
         return self
 
     async def __aexit__(self, exc_type: None, exc_value: None, traceback: None):
-        await self._session.commit()
-        await self._session.aclose()
+        if exc_type:
+            await self._session.rollback()
+        else:
+            await self._session.commit()
+        await self._session.close()
         self.content_managers.clear()
         gc.collect()
 
