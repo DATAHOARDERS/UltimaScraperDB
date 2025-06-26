@@ -1,14 +1,16 @@
 import re
-from typing import Any, Generic, List, Literal, TypeVar
+from dataclasses import asdict, dataclass
+from typing import Any, Generic, List, Literal, Optional, TypeVar
 
 import ultima_scraper_api
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Security
 from fastapi.encoders import jsonable_encoder
 from fastapi.routing import APIRouter
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pydantic.generics import GenericModel
 from sqlalchemy import nullslast, or_, orm, select
 from sqlalchemy.sql import func, or_, select
+from typing_extensions import Literal
 
 from ultima_scraper_db.databases.ultima_archive.api.client import (
     UAClient,
@@ -37,16 +39,46 @@ router = APIRouter(
 )
 
 
+class PaginatedResponse(GenericModel, Generic[T]):
+    total: int
+    results: List[T]
+
+
+class Filters:
+    def __init__(
+        self,
+        site_name: str,
+        q: str = Query(""),
+        order_by: Optional[str] = Query(None),
+        order_direction: str = Query("asc"),
+        has_ppv: Optional[bool] = Query(None),
+    ):
+        self.site_name = site_name
+        self.q = q
+        self.order_by = order_by
+        self.order_direction = order_direction
+        self.has_ppv = has_ppv
+
+    def as_dict(self, exclude_none: bool = False) -> dict[str, Any]:
+        data = self.__dict__
+        return (
+            {k: v for k, v in data.items() if v is not None} if exclude_none else data
+        )
+
+
 @router.get("/users/{site_name}")
 async def search_users(
-    site_name: str,
-    q: str = "",
-    order_by: str | None = None,
-    order_direction: str = "asc",  # new parameter to control sort direction
-    page: int = 1,
-    limit: int = 20,
+    filters: Filters = Depends(),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, le=50),
     ua_client: UAClient = Depends(get_ua_client),
 ):
+    site_name = filters.site_name
+    q = filters.q
+    order_by = filters.order_by or "id"
+    order_direction = filters.order_direction
+    has_ppv = filters.has_ppv
+
     database_api = ua_client.database_api
     site_api = ua_client.select_site_api(site_name)
     # Ensure valid order direction
@@ -95,11 +127,15 @@ async def search_users(
                     UserAliasModel.username.ilike(f"%{q}%"),
                 )
             )
-            .offset(offset)
-            .limit(limit)
-            .options(*restricted)
-            .options(orm.selectinload(UserModel.user_info))
         )
+        if has_ppv:
+            # Only include users who have at least one paid post or paid message
+            stmt = stmt.where(
+                or_(
+                    paid_posts_subquery.c.posts_ppv_count.isnot(None),
+                    paid_messages_subquery.c.messages_ppv_count.isnot(None),
+                )
+            )
 
         if order_by in ["downloaded_at", "size"]:
             field = (
@@ -113,6 +149,15 @@ async def search_users(
                 stmt = stmt.order_by(field, UserModel.id)
         else:
             stmt = stmt.order_by(UserModel.id)
+
+        total_stmt = select(func.count()).select_from(stmt.subquery())
+        total = await site_db_api.get_session().scalar(total_stmt)
+        stmt = (
+            stmt.offset(offset)
+            .limit(limit)
+            .options(*restricted)
+            .options(orm.selectinload(UserModel.user_info))
+        )
         results = await site_db_api.get_session().execute(stmt)
         final_users: list[dict[str, Any]] = []
         accurate_username = False
@@ -123,34 +168,30 @@ async def search_users(
                 accurate_username = True
             final_users.append(temp_user)
         if not final_users or not accurate_username:
-            authed = await site_api.login(guest=True)
-            if authed:
-                site_user = await authed.get_user(q)
-                if site_user:
-                    db_user = await site_db_api.get_user(
-                        site_user.id,
-                        extra_options=restricted,
-                    )
-                    user = await site_db_api.create_or_update_user(
-                        site_user, db_user, performer_optimize=True
-                    )
-                    user.content_manager = None
-                    await user.awaitable_attrs.aliases
-                    await user.awaitable_attrs.user_info
-                    await user.awaitable_attrs.remote_urls
-                    await authed.authenticator.close()
-                    results = await site_db_api.get_session().scalars(stmt)
-                    final_users = [
-                        jsonable_encoder(user, exclude={"user_info": "user"})
-                        for user in results.all()
-                    ]
+            async with site_api.login_context(guest=True) as authed:
+                if authed:
+                    site_user = await authed.get_user(q)
+                    if site_user:
+                        db_user = await site_db_api.get_user(
+                            site_user.id,
+                            extra_options=restricted,
+                        )
+                        user = await site_db_api.create_or_update_user(
+                            site_user, db_user, performer_optimize=True
+                        )
+                        user.content_manager = None
+                        await user.awaitable_attrs.aliases
+                        await user.awaitable_attrs.user_info
+                        await user.awaitable_attrs.remote_urls
+                        results = await site_db_api.get_session().scalars(stmt)
+                        final_users = [
+                            jsonable_encoder(user, exclude={"user_info": "user"})
+                            for user in results.all()
+                        ]
 
-        return final_users
-
-
-class PaginatedResponse(GenericModel, Generic[T]):
-    total: int
-    results: List[T]
+        return PaginatedResponse[dict[str, Any]](
+            total=total, results=jsonable_encoder(final_users)
+        )
 
 
 @router.get(

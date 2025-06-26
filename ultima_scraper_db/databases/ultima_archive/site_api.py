@@ -3,6 +3,7 @@ import gc
 import weakref
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import TracebackType
 from typing import TYPE_CHECKING, Any, Literal, Sequence, Type
 from urllib.parse import ParseResult
 
@@ -490,7 +491,12 @@ class SiteAPI:
         self._session: AsyncSession = self.schema.sessionmaker()
         return self
 
-    async def __aexit__(self, exc_type: None, exc_value: None, traceback: None):
+    async def __aexit__(
+        self,
+        exc_type: None | Type[BaseException],
+        exc_value: None | BaseException,
+        traceback: None | TracebackType,
+    ):
         if exc_type:
             await self._session.rollback()
         else:

@@ -1,6 +1,6 @@
 from typing import Any, Sequence
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Security
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import HTTPException
 from pydantic import BaseModel
@@ -37,6 +37,7 @@ restricted = (
     orm.defer(UserModel.updated_at),
     orm.defer(UserModel.created_at),
 )
+
 
 router = APIRouter(
     prefix="/users",

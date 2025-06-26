@@ -1,6 +1,7 @@
 import argparse
 import itertools
 import random
+from multiprocessing import Process
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -156,21 +157,30 @@ class Database:
         else:
             return None
 
+    def create_engine(
+        self, connection_string: str, execution_options: dict[str, Any] = {}
+    ) -> AsyncEngine:
+        engine = create_async_engine(
+            connection_string,
+            echo=self._echo,
+            pool_size=20,
+            max_overflow=5,
+            execution_options=execution_options,
+        )
+        return engine
+
     async def init_db(self, echo: bool = False):
         self._echo = echo
         if self.ssh:
             connection_string = f"postgresql+asyncpg://{self.username}:{self.password}@{self.ssh.local_bind_host}:{self.ssh.local_bind_port}/{self.name}"  # type: ignore
         else:
             connection_string = f"postgresql+asyncpg://{self.username}:{self.password}@{self.host}:{self.port}/{self.name}"
-        engine = create_async_engine(
-            connection_string,
-            echo=echo,
-            pool_size=30,
-            max_overflow=20,
-        )
-        self.engine = engine
         # Use 'postgres' as the database for the test connection
         await test_connection(connection_string.replace(f"/{self.name}", "/postgres"))
+
+        self.engine = self.create_engine(
+            connection_string,
+        )
         if not await database_exists(connection_string):
             confirm = input(
                 f"Database '{self.name}' does not exist. Create it? (y/n): "
@@ -181,7 +191,7 @@ class Database:
                 raise RuntimeError("Database setup aborted by user.")
         from sqlalchemy.schema import CreateSchema
 
-        async with engine.connect() as conn:
+        async with self.engine.connect() as conn:
 
             def create_schemas(session: Connection):
                 if not self.metadata:
@@ -198,7 +208,7 @@ class Database:
             await self.resolve_schemas()
         if self.alembica.is_migrate:
             await self.run_migrations()
-        await engine.dispose()
+        await self.engine.dispose()
         return self
 
     async def resolve_schemas(self):
@@ -207,15 +217,12 @@ class Database:
             schema_strings: list[str] = await conn.run_sync(show_schemas)
         assert schema_strings
         for schema_string in schema_strings:
-            engine = create_async_engine(
+            engine = self.create_engine(
                 connection_string,
-                echo=self._echo,
                 execution_options={
                     "application_name": schema_string,
                     "schema_translate_map": {None: schema_string},
                 },
-                pool_size=30,
-                max_overflow=20,
             )
             async_session = AsyncSession(engine, expire_on_commit=False)
             schema_obj = Schema(schema_string, engine, async_session, self)
@@ -378,18 +385,11 @@ class DatabaseAPI_:
         self.database = database
 
     def activate_api(self, fast_api: "RestAPI", port: int):
-        from multiprocessing import Process
 
-        origins = [
-            "*",
-        ]
-        fast_api.add_middleware(
-            CORSMiddleware,
-            allow_origins=origins,
-            allow_credentials=True,
-            allow_methods=["*"],
-            allow_headers=["*"],
-        )
+        from start import MIDDLEWARE
+
+        for cls, opts in MIDDLEWARE:
+            fast_api.add_middleware(cls, **opts)
 
         x = Process(
             target=thread_function,

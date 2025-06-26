@@ -1,5 +1,6 @@
 import asyncio
 from pathlib import Path
+from typing import Any
 
 from alembic.script.base import Script
 from ultima_scraper_collection.config import UltimaScraperCollectionConfig
@@ -7,6 +8,8 @@ from ultima_scraper_collection.config import UltimaScraperCollectionConfig
 from ultima_scraper_db.databases.ultima_archive import merged_metadata
 from ultima_scraper_db.databases.ultima_archive.database_api import ArchiveAPI
 from ultima_scraper_db.managers.database_manager import Alembica, DatabaseManager
+
+MIDDLEWARE: list[tuple[type, dict[str, Any]]] = []
 
 
 async def run(config: UltimaScraperCollectionConfig):
