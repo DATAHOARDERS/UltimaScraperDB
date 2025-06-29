@@ -415,7 +415,7 @@ class UserAuthModel(SiteTemplate):
                 active=self.user.active,
             )
         else:
-            details= FanslyAuthDetails(
+            details = FanslyAuthDetails(
                 id=self.user_id,
                 username=self.user.username,
                 authorization=self.authorization,
@@ -888,7 +888,15 @@ class FilePathModel(DefaultContentTypes, SiteTemplate):
 
 class UserAliasModel(SiteTemplate):
     __tablename__ = "user_aliases"
-    __table_args__ = (UniqueConstraint("user_id", "username"),)
+    __table_args__ = (
+        Index(
+            "idx_user_aliases_username_trgm",
+            "username",
+            postgresql_using="gin",
+            postgresql_ops={"username": "gin_trgm_ops"},
+        ),
+        UniqueConstraint("user_id", "username"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id"))

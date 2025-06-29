@@ -8,9 +8,11 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.routing import APIRouter
 from pydantic import BaseModel, Field
 from pydantic.generics import GenericModel
-from sqlalchemy import nullslast, or_, orm, select
-from sqlalchemy.sql import func, or_, select
+from sqlalchemy import Case, UnaryExpression, nullslast, or_, orm, select
+from sqlalchemy.orm.attributes import InstrumentedAttribute
+from sqlalchemy.sql import case, func, or_, select
 from typing_extensions import Literal
+from ultima_scraper_api.apis.auth_streamliner import datetime
 
 from ultima_scraper_db.databases.ultima_archive.api.client import (
     UAClient,
@@ -50,7 +52,7 @@ class Filters:
         site_name: str,
         q: str = Query(""),
         order_by: Optional[str] = Query(None),
-        order_direction: str = Query("asc"),
+        order_direction: Literal["asc", "desc"] = Query("asc"),
         has_ppv: Optional[bool] = Query(None),
     ):
         self.site_name = site_name
@@ -137,6 +139,15 @@ async def search_users(
                 )
             )
 
+        # Always order by exact match first
+        ordering: list[
+            Case[Any]
+            | UnaryExpression[datetime | int]
+            | InstrumentedAttribute[datetime]
+            | InstrumentedAttribute[int]
+        ] = [case((func.lower(UserModel.username) == q.lower(), 0), else_=1)]
+
+        # Then add field-based ordering if specified
         if order_by in ["downloaded_at", "size"]:
             field = (
                 UserModel.downloaded_at
@@ -144,13 +155,17 @@ async def search_users(
                 else UserInfoModel.size
             )
             if order_direction.lower() == "desc":
-                stmt = stmt.order_by(nullslast(field.desc()), UserModel.id)
+                ordering.append(nullslast(field.desc()))
             else:
-                stmt = stmt.order_by(field, UserModel.id)
-        else:
-            stmt = stmt.order_by(UserModel.id)
+                ordering.append(field)
 
-        total_stmt = select(func.count()).select_from(stmt.subquery())
+        # Always order by id last
+        ordering.append(UserModel.id)
+
+        # Apply to query
+        stmt = stmt.order_by(*ordering)
+
+        total_stmt = select(func.count(func.distinct(stmt.subquery().c.id)))
         total = await site_db_api.get_session().scalar(total_stmt)
         stmt = (
             stmt.offset(offset)
@@ -161,10 +176,11 @@ async def search_users(
         results = await site_db_api.get_session().execute(stmt)
         final_users: list[dict[str, Any]] = []
         accurate_username = False
-        for user, ppv_count in results:
+        for user, ppv_count in results.unique():
+            print(f"Processing user: {user.username}, PPV Count: {ppv_count}")
             temp_user = jsonable_encoder(user)
             temp_user["user_info"]["ppv_count"] = ppv_count
-            if q == user.username:
+            if q.lower() == user.username.lower():
                 accurate_username = True
             final_users.append(temp_user)
         if not final_users or not accurate_username:
@@ -179,13 +195,21 @@ async def search_users(
                         user = await site_db_api.create_or_update_user(
                             site_user, db_user, performer_optimize=True
                         )
+                        if site_user.username != q:
+                            _user_alias = await site_db_api.create_or_update_user_alias(
+                                user, q
+                            )
                         user.content_manager = None
                         await user.awaitable_attrs.aliases
                         await user.awaitable_attrs.user_info
                         await user.awaitable_attrs.remote_urls
                         results = await site_db_api.get_session().scalars(stmt)
+                        # fix this, we get json encode max recursion error, why? I don't know. But it could be because of the awaitable_attrs
+                        # _abc = results.all()
                         final_users = [
-                            jsonable_encoder(user, exclude={"user_info": "user"})
+                            jsonable_encoder(
+                                user, exclude={"user_info": "user", "aliases": "user"}
+                            )
                             for user in results.all()
                         ]
 

@@ -1194,6 +1194,19 @@ class SiteAPI:
         await session.commit()
         return db_user
 
+    async def create_or_update_user_alias(self, db_user: UserModel, alias: str):
+        stmt = select(UserAliasModel).where(
+            UserAliasModel.username == alias, UserAliasModel.user_id == db_user.id
+        )
+        found_alias = await self.get_session().scalar(stmt)
+        if not found_alias:
+            found_alias = UserAliasModel(username=alias, user_id=db_user.id)
+            db_user.aliases.append(found_alias)
+        else:
+            found_alias.username = alias
+        await self.get_session().commit()
+        return found_alias
+
     async def create_or_update_auth_info(
         self, api_authed: ultima_scraper_api.auth_types, db_user: UserModel
     ):
