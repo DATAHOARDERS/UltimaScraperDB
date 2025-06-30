@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING
 from fastapi import Request
 
 from ultima_scraper_db.databases.rest_api import RestAPI
+import ultima_scraper_db
 
 if TYPE_CHECKING:
     from ultima_scraper_collection.config import UltimaScraperCollectionConfig
@@ -20,6 +21,7 @@ class UAClient(RestAPI):
 
     def __init__(self, database_api: "ArchiveAPI"):
 
+        UAClient.dev = ultima_scraper_db.dev_mode
         from ultima_scraper_db.databases.ultima_archive.api.app import routers
 
         super().__init__(

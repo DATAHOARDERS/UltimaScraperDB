@@ -180,7 +180,7 @@ async def search_users(
             print(f"Processing user: {user.username}, PPV Count: {ppv_count}")
             temp_user = jsonable_encoder(user)
             temp_user["user_info"]["ppv_count"] = ppv_count
-            if q.lower() == user.username.lower():
+            if q.lower() == str(user.id) or q.lower() == user.username.lower():
                 accurate_username = True
             final_users.append(temp_user)
         if not final_users or not accurate_username:

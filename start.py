@@ -6,6 +6,7 @@ from typing import Any
 from alembic.script.base import Script
 from ultima_scraper_collection.config import UltimaScraperCollectionConfig
 
+import ultima_scraper_db
 from ultima_scraper_db import ALEMBICA_PATH
 from ultima_scraper_db.databases.ultima_archive import merged_metadata
 from ultima_scraper_db.databases.ultima_archive.database_api import ArchiveAPI
@@ -21,6 +22,7 @@ async def run(
     config: UltimaScraperCollectionConfig,
     args: argparse.Namespace = parser.parse_args(),
 ):
+    ultima_scraper_db.dev_mode = args.dev
     db_manager = DatabaseManager()
     db_config = config.settings.databases[0].connection_info.model_dump()
     # alembica_path = (
@@ -36,7 +38,10 @@ async def run(
     ultima_archive_db_api = ArchiveAPI(database)
     await ultima_archive_db_api.init()
     await ultima_archive_db_api.activate_fast_api(
-        await database.clone(), config, "127.0.0.1" if not args.dev else "0.0.0.0", 2140
+        await database.clone(),
+        config,
+        "127.0.0.1" if not args.dev else "0.0.0.0",
+        2140,
     )
     ultima_archive_db_api.server.join()
 
