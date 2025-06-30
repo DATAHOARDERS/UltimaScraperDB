@@ -1,4 +1,3 @@
-import argparse
 import itertools
 import random
 from multiprocessing import Process
@@ -27,9 +26,6 @@ from sshtunnel import SSHTunnelForwarder  # type: ignore
 from ultima_scraper_db.databases.rest_api import RestAPI
 from ultima_scraper_db.helpers import create_database, database_exists, test_connection
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--dev", action="store_true", help="Enable dev mode")
-args = parser.parse_args()
 
 if TYPE_CHECKING:
     from ultima_scraper_db.databases.ultima_archive.api.client import UAClient
@@ -371,10 +367,11 @@ class DatabaseManager:
         return self.databases[name]
 
 
-def thread_function(fast_api: "UAClient", port: int):
+def thread_function(fast_api: "UAClient", host: str, port: int):
+
     uvicorn.run(  # type: ignore
         fast_api,
-        host="127.0.0.1" if not args.dev else "0.0.0.0",
+        host=host,
         port=port,
         log_level="debug",
     )
@@ -384,7 +381,7 @@ class DatabaseAPI_:
     def __init__(self, database: Database) -> None:
         self.database = database
 
-    def activate_api(self, fast_api: "RestAPI", port: int):
+    def activate_api(self, fast_api: "RestAPI", host: str, port: int):
 
         from start import MIDDLEWARE
 
@@ -395,6 +392,7 @@ class DatabaseAPI_:
             target=thread_function,
             args=(
                 fast_api,
+                host,
                 port,
             ),
             daemon=True,

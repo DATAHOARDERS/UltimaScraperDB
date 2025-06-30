@@ -48,11 +48,12 @@ class ArchiveAPI(DatabaseAPI_):
         self,
         database: Database,
         config: "UltimaScraperCollectionConfig",
+        host: str = "127.0.0.1",
         port: int = 2140,
     ):
         fast_api = UAClient(database_api=ArchiveAPI(database))
         await fast_api.init(config)
-        self.activate_api(fast_api, port)
+        self.activate_api(fast_api, host, port)
         self.fast_api = fast_api
         return self.fast_api
 
