@@ -154,7 +154,7 @@ async def get_users(
         for user, ppv_count, last_posted_date in results:
             temp_user = jsonable_encoder(user)
             temp_user["user_info"]["ppv_count"] = ppv_count
-            temp_user["last_posted_date"] = last_posted_date
+            temp_user["last_posted_at"] = last_posted_date
             final_users.append(temp_user)
 
         return final_users
@@ -363,3 +363,17 @@ async def update_sex(
             await user.awaitable_attrs.user_info
             final_sex = 0 if sex == "female" else 1
             user.user_info.sex = final_sex
+
+
+@router.get("/optimise_test/{site_name}/{identifier}")
+async def optimise_test(
+    site_name: str,
+    identifier: int | str,
+    ua_client: UAClient = Depends(get_ua_client),
+):
+    database_api = ua_client.database_api
+    async with database_api.create_site_api(site_name) as site_db_api:
+        db_performer = await site_db_api.get_user(
+            identifier, load_content=True, load_media=True
+        )
+        pass

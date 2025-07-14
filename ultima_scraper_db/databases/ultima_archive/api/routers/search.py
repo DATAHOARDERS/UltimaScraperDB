@@ -197,7 +197,7 @@ async def search_users(
             temp_user = jsonable_encoder(user)
             if temp_user["user_info"]:
                 temp_user["user_info"]["ppv_count"] = ppv_count
-            temp_user["last_posted_date"] = last_posted_date
+            temp_user["last_posted_at"] = last_posted_date
             if q.lower() == str(user.id) or q.lower() == user.username.lower():
                 accurate_username = True
             final_users.append(temp_user)
