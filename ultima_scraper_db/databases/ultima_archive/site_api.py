@@ -94,14 +94,14 @@ def create_options(
                 content_relationship = inspector2.mapper.relationships
                 stmt = selectinload(relationship)  # type: ignore
                 if hasattr(content_relationship, "media"):
-                    stmt = stmt.selectinload(
-                        content_relationship["media"]
-                    ).selectinload(MediaModel.filepaths)
+                    stmt = stmt.joinedload(content_relationship["media"]).joinedload(
+                        MediaModel.filepaths
+                    )
                 joined_options.append(stmt)
     if media:
         stmt = selectinload(UserModel.medias).options(
-            selectinload(MediaModel.filepaths),
-            selectinload(MediaModel.content_media_assos),
+            joinedload(MediaModel.filepaths),
+            joinedload(MediaModel.content_media_assos),
         )
         joined_options.append(stmt)
     if user_info:
@@ -546,6 +546,20 @@ class SiteAPI:
         limit: int | None = None,
         extra_options: Any = (),
     ):
+        stmt_builder = (
+            StatementBuilder(UserModel)
+            .filter_by_user_identifiers(identifiers)
+            .filter_by_description(description)
+        )
+        stmt = stmt_builder.statement
+        if performer is not None:
+            stmt = stmt.where(UserModel.performer == performer)
+        if has_paid_content is not None:
+            stmt = (
+                stmt.where(UserModel.supplied_contents.any())
+                .join(UserModel.supplied_contents)
+                .where(UserAuthModel.active == True)
+            )
         options = create_options(
             content=load_content,
             media=load_media,
@@ -555,20 +569,7 @@ class SiteAPI:
             remote_urls=load_remote_urls,
         )
         options += extra_options
-        stmt_builder = (
-            StatementBuilder(UserModel)
-            .filter_by_user_identifiers(identifiers)
-            .filter_by_description(description)
-        )
-        stmt = stmt_builder.statement.options(*options).distinct().limit(limit)
-        if performer is not None:
-            stmt = stmt.where(UserModel.performer == performer)
-        if has_paid_content is not None:
-            stmt = (
-                stmt.where(UserModel.supplied_contents.any())
-                .join(UserModel.supplied_contents)
-                .where(UserAuthModel.active == True)
-            )
+        stmt = stmt.options(*options).distinct().limit(limit)
         return stmt
 
     async def get_users(

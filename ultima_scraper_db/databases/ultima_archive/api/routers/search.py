@@ -108,6 +108,15 @@ async def search_users(
             .group_by(MessageModel.user_id)
             .subquery()
         )
+        last_post_date_subquery = (
+            select(
+                PostModel.user_id,
+                func.max(PostModel.created_at).label("last_posted_date"),
+            )
+            .group_by(PostModel.user_id)
+            .subquery()
+        )
+
         stmt = (
             select(
                 UserModel,
@@ -115,6 +124,7 @@ async def search_users(
                     func.coalesce(paid_posts_subquery.c.posts_ppv_count, 0)
                     + func.coalesce(paid_messages_subquery.c.messages_ppv_count, 0)
                 ).label("ppv_count"),
+                last_post_date_subquery.c.last_posted_date,
             )
             .outerjoin(
                 paid_posts_subquery, UserModel.id == paid_posts_subquery.c.user_id
@@ -123,6 +133,10 @@ async def search_users(
                 paid_messages_subquery, UserModel.id == paid_messages_subquery.c.user_id
             )
             .outerjoin(UserAliasModel)
+            .outerjoin(
+                last_post_date_subquery,
+                UserModel.id == last_post_date_subquery.c.user_id,
+            )
             .where(
                 or_(
                     UserModel.username.ilike(f"%{q}%"),
@@ -176,10 +190,14 @@ async def search_users(
         results = await site_db_api.get_session().execute(stmt)
         final_users: list[dict[str, Any]] = []
         accurate_username = False
-        for user, ppv_count in results.unique():
-            print(f"Processing user: {user.username}, PPV Count: {ppv_count}")
+        for user, ppv_count, last_posted_date in results.unique():
+            print(
+                f"Processing user: {user.username}, PPV Count: {ppv_count}, Last Post Date: {last_posted_date}"
+            )
             temp_user = jsonable_encoder(user)
-            temp_user["user_info"]["ppv_count"] = ppv_count
+            if temp_user["user_info"]:
+                temp_user["user_info"]["ppv_count"] = ppv_count
+            temp_user["last_posted_date"] = last_posted_date
             if q.lower() == str(user.id) or q.lower() == user.username.lower():
                 accurate_username = True
             final_users.append(temp_user)

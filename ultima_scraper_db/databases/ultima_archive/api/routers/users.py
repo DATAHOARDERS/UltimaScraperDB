@@ -90,6 +90,16 @@ async def get_users(
             .subquery()
         )
 
+        # Subquery for last post date per user
+        last_post_date_subquery = (
+            select(
+                PostModel.user_id,
+                func.max(PostModel.created_at).label("last_posted_date"),
+            )
+            .group_by(PostModel.user_id)
+            .subquery()
+        )
+
         # Main query with joins to both subqueries
         stmt = (
             select(
@@ -98,12 +108,17 @@ async def get_users(
                     func.coalesce(paid_posts_subquery.c.posts_ppv_count, 0)
                     + func.coalesce(paid_messages_subquery.c.messages_ppv_count, 0)
                 ).label("ppv_count"),
+                last_post_date_subquery.c.last_posted_date,
             )
             .outerjoin(
                 paid_posts_subquery, UserModel.id == paid_posts_subquery.c.user_id
             )
             .outerjoin(
                 paid_messages_subquery, UserModel.id == paid_messages_subquery.c.user_id
+            )
+            .outerjoin(
+                last_post_date_subquery,
+                UserModel.id == last_post_date_subquery.c.user_id,
             )
             .join(UserInfoModel, UserModel.id == UserInfoModel.user_id)
             .where(UserModel.performer.is_(True))
@@ -136,9 +151,10 @@ async def get_users(
 
         # Process results
         final_users: list[dict[str, Any]] = []
-        for user, ppv_count in results:
+        for user, ppv_count, last_posted_date in results:
             temp_user = jsonable_encoder(user)
             temp_user["user_info"]["ppv_count"] = ppv_count
+            temp_user["last_posted_date"] = last_posted_date
             final_users.append(temp_user)
 
         return final_users
